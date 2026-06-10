@@ -7,6 +7,7 @@ use crate::errors::AppError;
 use crate::spatial_syntax::*;
 use crate::fractal::*;
 use crate::config::algorithm::*;
+use crate::metrics;
 
 pub async fn get_morphology(
     pool: web::Data<PgPool>,
@@ -74,6 +75,8 @@ pub async fn analyze_morphology(
     site_id: web::Path<i32>,
 ) -> Result<HttpResponse, AppError> {
     let site_id = site_id.into_inner();
+    tracing::info!(site_id = %site_id, "Starting morphology analysis");
+    metrics::inc_syntax_compute();
 
     let city_row = sqlx::query!(
         r#"
@@ -111,6 +114,7 @@ pub async fn analyze_morphology(
     .await?;
 
     let boundary_points = extract_polygon_points(&city_row.geom_json);
+    metrics::inc_fractal_compute();
     let boundary_fd_result = boundary_fractal_dimension_robust(
         &boundary_points,
         FRACTAL_NUM_SCALES,

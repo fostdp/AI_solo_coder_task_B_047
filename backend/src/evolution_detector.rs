@@ -6,12 +6,15 @@ use crate::models::*;
 use crate::errors::AppError;
 use crate::mann_kendall::*;
 use crate::config::algorithm::*;
+use crate::metrics;
 
 pub async fn analyze_trends(
     pool: web::Data<PgPool>,
     req: web::Json<TrendAnalysisRequest>,
 ) -> Result<HttpResponse, AppError> {
     let indicator = &req.indicator;
+    tracing::info!(indicator = %indicator, "Starting Mann-Kendall trend analysis");
+    metrics::inc_mk_test();
 
     let rows = sqlx::query!(
         r#"

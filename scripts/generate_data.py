@@ -249,7 +249,18 @@ def point_to_wkt(lon, lat):
 
 def main():
     db_url = os.environ.get("DATABASE_URL", "dbname=ancient_city user=postgres password=postgres host=localhost port=5432")
-    
+    dynasty_filter = os.environ.get("DYNASTY_FILTER", "")
+    seed = int(os.environ.get("SEED", "42"))
+    random.seed(seed)
+
+    print("="*60)
+    print("古代城市遗址数据模拟器")
+    print(f"数据库: {db_url.split('@')[-1] if '@' in db_url else db_url}")
+    print(f"随机种子: {seed}")
+    if dynasty_filter:
+        print(f"朝代过滤: {dynasty_filter}")
+    print("="*60)
+
     print("连接数据库...")
     conn = psycopg2.connect(db_url)
     cur = conn.cursor()
@@ -264,6 +275,8 @@ def main():
     all_sites = []
     
     for dynasty_name, start_year, end_year, count in DYNASTIES:
+        if dynasty_filter and dynasty_filter not in dynasty_name and dynasty_name not in dynasty_filter:
+            continue
         if dynasty_name not in dynasty_map:
             print(f"警告：找不到朝代 {dynasty_name}，跳过")
             continue

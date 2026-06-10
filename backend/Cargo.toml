@@ -7,12 +7,15 @@ description = "古代城市遗址空间结构复原与形态演化分析系统�
 [dependencies]
 actix-web = "4"
 actix-cors = "0.7"
+actix-web-lab = "0.20"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sqlx = { version = "0.7", features = ["runtime-async-std", "postgres", "chrono", "json"] }
 chrono = { version = "0.4", features = ["serde"] }
-env_logger = "0.10"
-log = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-actix-web = "0.7"
+prometheus = { version = "0.13", features = ["process"] }
 dotenv = "0.15"
 thiserror = "1.0"
 geo-types = "0.7"

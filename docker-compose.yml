@@ -8,23 +8,43 @@ services:
       POSTGRES_DB: ancient_city
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+      PGDATA: /var/lib/postgresql/data/pgdata
+    command: postgres -c 'max_connections=100' -c 'shared_buffers=256MB' -c 'effective_cache_size=768MB' -c 'work_mem=64MB' -c 'maintenance_work_mem=64MB'
     ports:
       - "5432:5432"
     volumes:
       - postgis_data:/var/lib/postgresql/data
-      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+      - ./database/postgresql.conf:/etc/postgresql/postgresql.conf:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ancient_city"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  simulator:
+    build: ./scripts
+    container_name: ancient-city-simulator
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgis:5432/ancient_city
+      SEED: "42"
+      DYNASTY_FILTER: ""
+    depends_on:
+      postgis:
+        condition: service_healthy
+    volumes:
+      - ./scripts:/app:ro
+    profiles:
+      - data
 
   backend:
     build: ./backend
     container_name: ancient-city-backend
     environment:
       DATABASE_URL: postgres://postgres:postgres@postgis:5432/ancient_city
-      RUST_LOG: info
+      RUST_LOG: info,ancient_city_morphology=debug,tracing_actix_web=info
       PORT: 8080
     ports:
       - "8080:8080"
@@ -32,6 +52,11 @@ services:
       postgis:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   frontend:
     image: nginx:alpine

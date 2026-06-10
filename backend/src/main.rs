@@ -1,7 +1,11 @@
-use actix_web::{web, App, HttpServer, middleware::Logger};
+use actix_web::{web, App, HttpServer, middleware, HttpResponse};
 use actix_cors::Cors;
+use actix_web_lab::middleware::from_fn;
 use dotenv::dotenv;
 use std::env;
+use std::time::Instant;
+use tracing_actix_web::TracingLogger;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 mod db;
 mod models;
@@ -13,11 +17,49 @@ mod spatial_syntax;
 mod fractal;
 mod mann_kendall;
 mod errors;
+mod metrics;
+
+fn init_tracing() {
+    tracing_subscriber::registry()
+        .with(EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| "ancient_city_morphology=info,tower_http=info".into()))
+        .with(tracing_subscriber::fmt::layer()
+            .with_target(true)
+            .with_thread_ids(true)
+            .with_file(true)
+            .with_line_number(true))
+        .init();
+}
+
+async fn metrics_endpoint() -> HttpResponse {
+    let body = metrics::gather_metrics_text();
+    HttpResponse::Ok()
+        .content_type("text/plain; version=0.0.4; charset=utf-8")
+        .body(body)
+}
+
+async fn timing_middleware(
+    req: actix_web::dev::ServiceRequest,
+    srv: actix_web::dev::Service,
+) -> Result<actix_web::dev::ServiceResponse, actix_web::Error> {
+    let method = req.method().to_string();
+    let path = req.path().to_string();
+    let start = Instant::now();
+    let fut = srv.call(req);
+    let res = fut.await?;
+    let duration = start.elapsed().as_secs_f64();
+    let status = res.status().as_u16();
+    metrics::record_request(&method, &path, status);
+    metrics::record_request_duration(&method, &path, duration);
+    tracing::info!(method = %method, path = %path, status = %status, duration_secs = %duration, "request handled");
+    Ok(res)
+}
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     dotenv().ok();
-    env_logger::init();
+    init_tracing();
+    metrics::init_metrics();
 
     let database_url = env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/ancient_city".to_string());
@@ -31,7 +73,7 @@ async fn main() -> std::io::Result<()> {
         .parse::<u16>()
         .unwrap_or(8080);
 
-    println!("Server starting on http://localhost:{}", port);
+    tracing::info!(port = %port, "Starting ancient city morphology server");
 
     HttpServer::new(move || {
         let cors = Cors::permissive();
@@ -39,7 +81,10 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .app_data(web::Data::new(pool.clone()))
             .wrap(cors)
-            .wrap(Logger::default())
+            .wrap(TracingLogger::default())
+            .wrap(middleware::Compress::default())
+            .wrap_fn(timing_middleware)
+            .route("/metrics", web::get().to(metrics_endpoint))
             .route("/api/health", web::get().to(city_loader::health_check))
             .route("/api/dynasties", web::get().to(city_loader::get_dynasties))
             .route("/api/sites", web::get().to(city_loader::get_city_sites))
