@@ -319,3 +319,243 @@ pub async fn get_land_use_trend_handler(
     let trend = compute_land_use_trend(&timeline);
     Ok(HttpResponse::Ok().json(ApiResponse::success(trend)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    #[test]
+    fn test_generate_simulated_land_use_period_count() {
+        let tl = generate_simulated_land_use(1);
+        assert_eq!(tl.periods.len(), algorithm::LAND_USE_NUM_PERIODS);
+    }
+
+    #[test]
+    fn test_generate_simulated_land_use_site_id_preserved() {
+        let tl = generate_simulated_land_use(42);
+        assert_eq!(tl.site_id, 42);
+    }
+
+    #[test]
+    fn test_generate_simulated_land_use_each_period_has_8_types() {
+        let tl = generate_simulated_land_use(1);
+        for (i, p) in tl.periods.iter().enumerate() {
+            assert_eq!(p.items.len(), 8, "period {} has {} types", i, p.items.len());
+        }
+    }
+
+    #[test]
+    fn test_generate_simulated_land_use_peak_urban_first_period() {
+        let tl = generate_simulated_land_use(1);
+        let periods = &tl.periods;
+        assert!(periods.len() >= 2);
+        let urban_first = periods[0].items.iter()
+            .find(|i| i.land_use_type == "urban").unwrap().area_km2;
+        let urban_last = periods.last().unwrap().items.iter()
+            .find(|i| i.land_use_type == "urban").unwrap().area_km2;
+        assert!(urban_first > urban_last,
+            "urban area should decline: first={} > last={}", urban_first, urban_last);
+    }
+
+    #[test]
+    fn test_generate_simulated_land_use_urban_decays_over_time() {
+        let tl = generate_simulated_land_use(1);
+        let urban_values: Vec<f64> = tl.periods.iter()
+            .map(|p| p.items.iter()
+                .find(|i| i.land_use_type == "urban")
+                .unwrap().area_km2)
+            .collect();
+
+        for i in 1..urban_values.len() {
+            assert!(urban_values[i] <= urban_values[i-1] * 1.05,
+                "urban should not increase significantly at period {}: {} > {}",
+                i, urban_values[i], urban_values[i-1]);
+        }
+    }
+
+    #[test]
+    fn test_generate_simulated_land_use_total_area_roughly_constant() {
+        let tl = generate_simulated_land_use(1);
+        let totals: Vec<f64> = tl.periods.iter()
+            .map(|p| p.items.iter().map(|i| i.area_km2).sum())
+            .collect();
+
+        let avg: f64 = totals.iter().sum::<f64>() / totals.len() as f64;
+        for (i, t) in totals.iter().enumerate() {
+            let ratio = t / avg;
+            assert!(ratio > 0.5 && ratio < 2.0,
+                "period {} total area {} deviates too much from avg {}",
+                i, t, avg);
+        }
+    }
+
+    #[test]
+    fn test_generate_simulated_land_use_farmland_increases() {
+        let tl = generate_simulated_land_use(1);
+        let periods = &tl.periods;
+        let farm_first = periods[0].items.iter()
+            .find(|i| i.land_use_type == "farmland").unwrap().area_km2;
+        let farm_last = periods.last().unwrap().items.iter()
+            .find(|i| i.land_use_type == "farmland").unwrap().area_km2;
+        assert!(farm_last >= farm_first * 0.95,
+            "farmland should eventually rise or stay");
+    }
+
+    #[test]
+    fn test_generate_simulated_land_use_all_areas_non_negative() {
+        let tl = generate_simulated_land_use(1);
+        for p in &tl.periods {
+            for it in &p.items {
+                assert!(it.area_km2 >= 0.0,
+                    "period {} type {} has negative area {}",
+                    p.period_name, it.land_use_type, it.area_km2);
+                assert!(it.percentage >= 0.0,
+                    "period {} type {} has negative pct {}",
+                    p.period_name, it.land_use_type, it.percentage);
+            }
+        }
+    }
+
+    #[test]
+    fn test_generate_simulated_land_use_percentage_sum_100() {
+        let tl = generate_simulated_land_use(1);
+        for (i, p) in tl.periods.iter().enumerate() {
+            let s: f64 = p.items.iter().map(|it| it.percentage).sum();
+            assert_relative_eq!(s, 100.0, epsilon = 0.5,
+                "period {} sum pct = {}, not 100", i, s);
+        }
+    }
+
+    #[test]
+    fn test_generate_simulated_land_use_period_names_all_unique() {
+        let tl = generate_simulated_land_use(1);
+        let mut names: Vec<_> = tl.periods.iter().map(|p| &p.period_name).collect();
+        let orig_len = names.len();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), orig_len, "period names should be unique");
+    }
+
+    #[test]
+    fn test_generate_simulated_land_use_all_types_present() {
+        let tl = generate_simulated_land_use(1);
+        let expected = ["urban", "farmland", "forest", "grassland",
+            "wetland", "water", "wasteland", "settlement"];
+
+        for p in &tl.periods {
+            for t in &expected {
+                assert!(p.items.iter().any(|i| i.land_use_type == t),
+                    "type {} missing in period {}", t, p.period_name);
+            }
+        }
+    }
+
+    #[test]
+    fn test_generate_simulated_land_use_labels_match_constants() {
+        let tl = generate_simulated_land_use(1);
+        for (i, p) in tl.periods.iter().enumerate() {
+            assert_eq!(p.period_name, PERIOD_NAMES[i]);
+        }
+    }
+
+    #[test]
+    fn test_compute_land_use_trend_returns_required_keys() {
+        let tl = generate_simulated_land_use(1);
+        let trend = compute_land_use_trend(&tl);
+
+        assert!(trend.get("summary").is_some());
+        assert!(trend.get("urban_decay_rate").is_some());
+        assert!(trend.get("change_rates").is_some());
+        assert!(trend.get("dominant_transitions").is_some());
+        assert!(trend.get("trend_classification").is_some());
+    }
+
+    #[test]
+    fn test_compute_land_use_trend_urban_decay_rate_negative_or_zero() {
+        let tl = generate_simulated_land_use(1);
+        let trend = compute_land_use_trend(&tl);
+        let decay = trend["urban_decay_rate"].as_f64().unwrap();
+        assert!(decay <= 0.01, "urban decay should be non-positive, got {}", decay);
+    }
+
+    #[test]
+    fn test_compute_land_use_trend_classification_valid_level() {
+        let tl = generate_simulated_land_use(1);
+        let trend = compute_land_use_trend(&tl);
+        let class = trend["trend_classification"].as_str().unwrap();
+        let valid = ["快速衰败型", "加速衰败型", "稳定转化型", "缓慢恢复型", "显著复兴型"];
+        assert!(valid.contains(&class), "invalid classification: {}", class);
+    }
+
+    #[test]
+    fn test_compute_land_use_trend_change_rates_has_8_entries() {
+        let tl = generate_simulated_land_use(1);
+        let trend = compute_land_use_trend(&tl);
+        let cr = trend["change_rates"].as_object().unwrap();
+        assert_eq!(cr.len(), 8);
+    }
+
+    #[test]
+    fn test_compute_land_use_trend_empty_periods_safe() {
+        let tl = LandUseTimeline {
+            site_id: 1,
+            periods: vec![],
+        };
+        let trend = compute_land_use_trend(&tl);
+        assert!(trend.get("summary").is_some());
+        assert!(trend["urban_decay_rate"].as_f64().is_some() ||
+                trend["urban_decay_rate"].is_null());
+    }
+
+    #[test]
+    fn test_compute_land_use_trend_single_period_safe() {
+        let mut tl = generate_simulated_land_use(1);
+        tl.periods.truncate(1);
+        let trend = compute_land_use_trend(&tl);
+        assert!(trend.get("summary").is_some());
+    }
+
+    #[test]
+    fn test_compute_land_use_trend_farmland_trend_positive() {
+        let tl = generate_simulated_land_use(1);
+        let trend = compute_land_use_trend(&tl);
+        let cr = trend["change_rates"].as_object().unwrap();
+        let farm_rate = cr.get("farmland").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        assert!(farm_rate >= -0.5,
+            "farmland trend should be generally non-negative or mildly negative, got {}",
+            farm_rate);
+    }
+
+    #[test]
+    fn test_pipeline_generate_then_trend() {
+        let tl = generate_simulated_land_use(7);
+        assert_eq!(tl.site_id, 7);
+        assert_eq!(tl.periods.len(), algorithm::LAND_USE_NUM_PERIODS);
+        assert_eq!(tl.periods[0].items.len(), 8);
+
+        let trend = compute_land_use_trend(&tl);
+        assert!(trend.get("summary").is_some());
+        let summary = trend["summary"].as_str().unwrap();
+        assert!(!summary.is_empty());
+    }
+
+    #[test]
+    fn test_periods_count_matches_constant() {
+        use crate::config::algorithm::LAND_USE_NUM_PERIODS;
+        assert_eq!(PERIOD_NAMES.len(), LAND_USE_NUM_PERIODS);
+    }
+
+    #[test]
+    fn test_land_use_colors_match_length() {
+        assert_eq!(LAND_USE_COLORS.len(), LAND_USE_TYPES.len());
+        assert_eq!(LAND_USE_LABELS.len(), LAND_USE_TYPES.len());
+    }
+
+    #[test]
+    fn test_land_use_all_types_defined() {
+        let expected_types = ["urban", "farmland", "forest", "grassland",
+            "wetland", "water", "wasteland", "settlement"];
+        assert_eq!(LAND_USE_TYPES, expected_types);
+    }
+}

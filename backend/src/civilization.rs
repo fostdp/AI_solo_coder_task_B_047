@@ -328,3 +328,292 @@ pub async fn get_civilization_sites_handler(
     let result = get_civilization_sites(&pool, *civ_id).await?;
     Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    fn sample_metrics_china() -> CivilizationAvgMetrics {
+        CivilizationAvgMetrics {
+            civilization_id: 1,
+            civilization_name: "古代中国".to_string(),
+            site_count: 10,
+            avg_integration_global: 1.5,
+            avg_choice_global: 0.7,
+            avg_boundary_fd: 1.3,
+            avg_road_fd: 1.6,
+            avg_compactness: 0.8,
+            avg_road_density: 8.0,
+            avg_functional_diversity: 2.0,
+            avg_area_sq_km: 6.0,
+        }
+    }
+
+    fn sample_metrics_rome() -> CivilizationAvgMetrics {
+        CivilizationAvgMetrics {
+            civilization_id: 2,
+            civilization_name: "古罗马".to_string(),
+            site_count: 8,
+            avg_integration_global: 1.0,
+            avg_choice_global: 0.8,
+            avg_boundary_fd: 1.6,
+            avg_road_fd: 1.7,
+            avg_compactness: 0.6,
+            avg_road_density: 6.0,
+            avg_functional_diversity: 1.8,
+            avg_area_sq_km: 12.0,
+        }
+    }
+
+    fn sample_metrics_maya() -> CivilizationAvgMetrics {
+        CivilizationAvgMetrics {
+            civilization_id: 3,
+            civilization_name: "玛雅".to_string(),
+            site_count: 5,
+            avg_integration_global: 0.7,
+            avg_choice_global: 0.3,
+            avg_boundary_fd: 1.7,
+            avg_road_fd: 1.3,
+            avg_compactness: 0.3,
+            avg_road_density: 2.0,
+            avg_functional_diversity: 1.0,
+            avg_area_sq_km: 2.0,
+        }
+    }
+
+    #[test]
+    fn test_normalize_within_range() {
+        assert_relative_eq!(normalize(0.5, 0.0, 1.0), 0.5);
+        assert_relative_eq!(normalize(0.0, 0.0, 1.0), 0.0);
+        assert_relative_eq!(normalize(1.0, 0.0, 1.0), 1.0);
+    }
+
+    #[test]
+    fn test_normalize_clamps_out_of_range() {
+        assert_relative_eq!(normalize(-1.0, 0.0, 1.0), 0.0);
+        assert_relative_eq!(normalize(2.0, 0.0, 1.0), 1.0);
+    }
+
+    #[test]
+    fn test_normalize_linear_midpoint() {
+        assert_relative_eq!(normalize(5.0, 0.0, 10.0), 0.5);
+    }
+
+    #[test]
+    fn test_normalize_same_min_max_returns_safe() {
+        let r = normalize(5.0, 5.0, 5.0);
+        assert!(r.is_nan() || r >= 0.0);
+    }
+
+    #[test]
+    fn test_compute_radar_values_length_is_eight() {
+        let m = sample_metrics_china();
+        let vals = compute_radar_values(&m);
+        assert_eq!(vals.len(), 8);
+    }
+
+    #[test]
+    fn test_compute_radar_values_all_bounded_0_1() {
+        let m = sample_metrics_china();
+        let vals = compute_radar_values(&m);
+        for (i, v) in vals.iter().enumerate() {
+            assert!(*v >= 0.0 && *v <= 1.0, "radar[{}]={} out of range", i, v);
+        }
+    }
+
+    #[test]
+    fn test_compute_radar_values_extreme_high_inputs_clamped() {
+        let m = CivilizationAvgMetrics {
+            civilization_id: 0,
+            civilization_name: "test".to_string(),
+            site_count: 1,
+            avg_integration_global: 100.0,
+            avg_choice_global: 100.0,
+            avg_boundary_fd: 100.0,
+            avg_road_fd: 100.0,
+            avg_compactness: 99.0,
+            avg_road_density: 100.0,
+            avg_functional_diversity: 100.0,
+            avg_area_sq_km: 100.0,
+        };
+        let vals = compute_radar_values(&m);
+        for v in &vals {
+            assert!(*v <= 1.0 + 1e-9);
+        }
+    }
+
+    #[test]
+    fn test_compute_radar_values_extreme_low_inputs_clamped() {
+        let m = CivilizationAvgMetrics {
+            civilization_id: 0,
+            civilization_name: "test".to_string(),
+            site_count: 1,
+            avg_integration_global: -100.0,
+            avg_choice_global: -100.0,
+            avg_boundary_fd: -100.0,
+            avg_road_fd: -100.0,
+            avg_compactness: -99.0,
+            avg_road_density: -100.0,
+            avg_functional_diversity: -100.0,
+            avg_area_sq_km: -100.0,
+        };
+        let vals = compute_radar_values(&m);
+        for v in &vals {
+            assert!(*v >= 0.0 - 1e-9);
+        }
+    }
+
+    #[test]
+    fn test_compute_radar_values_different_civs_produce_different_profiles() {
+        let china = sample_metrics_china();
+        let maya = sample_metrics_maya();
+        let v_c = compute_radar_values(&china);
+        let v_m = compute_radar_values(&maya);
+
+        let sum_diff: f64 = v_c.iter().zip(v_m.iter()).map(|(a, b)| (a - b).abs()).sum();
+        assert!(sum_diff > 0.5, "civilization profiles should differ, got diff={}", sum_diff);
+    }
+
+    #[test]
+    fn test_compute_radar_values_china_compactness_higher_than_maya() {
+        let china = sample_metrics_china();
+        let maya = sample_metrics_maya();
+        let v_c = compute_radar_values(&china);
+        let v_m = compute_radar_values(&maya);
+
+        assert!(v_c[4] > v_m[4],
+            "China compactness (v_c[4]={}) > Maya (v_m[4]={})", v_c[4], v_m[4]);
+    }
+
+    #[test]
+    fn test_generate_civilization_planning_notes_has_required_keys() {
+        let m = sample_metrics_china();
+        let notes = generate_civilization_planning_notes(1, &m);
+        let required = ["planning_style", "road_pattern", "functional_characteristic",
+            "city_scale", "road_complexity", "civilization_id"];
+        for k in &required {
+            assert!(notes.contains_key(*k), "missing key: {}", k);
+        }
+    }
+
+    #[test]
+    fn test_generate_civilization_planning_notes_high_compactness_returns_compact() {
+        let mut m = sample_metrics_china();
+        m.avg_compactness = 0.9;
+        m.avg_boundary_fd = 1.2;
+        let notes = generate_civilization_planning_notes(1, &m);
+        assert_eq!(notes["planning_style"], "紧凑规整型");
+    }
+
+    #[test]
+    fn test_generate_civilization_planning_notes_organic_when_boundary_high() {
+        let mut m = sample_metrics_rome();
+        m.avg_compactness = 0.5;
+        m.avg_boundary_fd = 1.8;
+        let notes = generate_civilization_planning_notes(2, &m);
+        assert_eq!(notes["planning_style"], "有机生长型");
+    }
+
+    #[test]
+    fn test_generate_civilization_planning_notes_grid_road_when_high_integration() {
+        let mut m = sample_metrics_china();
+        m.avg_integration_global = 1.5;
+        m.avg_choice_global = 0.4;
+        let notes = generate_civilization_planning_notes(1, &m);
+        assert_eq!(notes["road_pattern"], "方格网为主，层级清晰");
+    }
+
+    #[test]
+    fn test_generate_civilization_planning_notes_radial_when_high_choice() {
+        let mut m = sample_metrics_rome();
+        m.avg_integration_global = 0.9;
+        m.avg_choice_global = 0.8;
+        let notes = generate_civilization_planning_notes(2, &m);
+        assert_eq!(notes["road_pattern"], "放射状，中心性强");
+    }
+
+    #[test]
+    fn test_generate_civilization_planning_notes_large_city() {
+        let mut m = sample_metrics_rome();
+        m.avg_area_sq_km = 20.0;
+        let notes = generate_civilization_planning_notes(2, &m);
+        assert_eq!(notes["city_scale"], "大型城市");
+    }
+
+    #[test]
+    fn test_generate_civilization_planning_notes_small_city() {
+        let mut m = sample_metrics_maya();
+        m.avg_area_sq_km = 0.5;
+        let notes = generate_civilization_planning_notes(3, &m);
+        assert_eq!(notes["city_scale"], "小型城市");
+    }
+
+    #[test]
+    fn test_generate_civilization_planning_notes_high_functional_diversity() {
+        let mut m = sample_metrics_china();
+        m.avg_functional_diversity = 2.4;
+        let notes = generate_civilization_planning_notes(1, &m);
+        assert_eq!(notes["functional_characteristic"], "功能高度混合");
+    }
+
+    #[test]
+    fn test_generate_civilization_planning_notes_complex_roads() {
+        let mut m = sample_metrics_rome();
+        m.avg_road_fd = 1.85;
+        let notes = generate_civilization_planning_notes(2, &m);
+        assert_eq!(notes["road_complexity"], "路网形态复杂");
+    }
+
+    #[test]
+    fn test_generate_civilization_planning_notes_simple_roads() {
+        let mut m = sample_metrics_china();
+        m.avg_road_fd = 1.3;
+        let notes = generate_civilization_planning_notes(1, &m);
+        assert_eq!(notes["road_complexity"], "路网形态简单规整");
+    }
+
+    #[test]
+    fn test_generate_civilization_planning_notes_id_preserved() {
+        let m = sample_metrics_maya();
+        let notes = generate_civilization_planning_notes(42, &m);
+        assert_eq!(notes["civilization_id"], "42");
+    }
+
+    #[test]
+    fn test_civilization_separation_euclidean_distinct() {
+        let profiles = vec![
+            compute_radar_values(&sample_metrics_china()),
+            compute_radar_values(&sample_metrics_rome()),
+            compute_radar_values(&sample_metrics_maya()),
+        ];
+
+        for i in 0..profiles.len() {
+            for j in (i+1)..profiles.len() {
+                let dist: f64 = profiles[i].iter().zip(profiles[j].iter())
+                    .map(|(a, b)| (a - b).powi(2)).sum::<f64>().sqrt();
+                assert!(dist > 0.3,
+                    "Civ {} and Civ {} not well-separated (Euclidean = {})",
+                    i, j, dist);
+            }
+        }
+    }
+
+    #[test]
+    fn test_radar_indicators_list_is_eight() {
+        assert_eq!(RADAR_INDICATORS.len(), 8);
+    }
+
+    #[test]
+    fn test_combined_meaningful_radar_and_notes() {
+        let rome = sample_metrics_rome();
+        let vals = compute_radar_values(&rome);
+        let notes = generate_civilization_planning_notes(2, &rome);
+
+        assert_eq!(vals.len(), RADAR_INDICATORS.len());
+        assert!(notes.contains_key("planning_style"));
+
+        let avg: f64 = vals.iter().sum::<f64>() / vals.len() as f64;
+        assert!(avg > 0.05, "avg radar should be meaningful, got {}", avg);
+    }
+}

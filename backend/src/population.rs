@@ -518,3 +518,415 @@ pub async fn get_population_distributions_handler(
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(distributions)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    fn sample_zones() -> Vec<(String, f64)> {
+        vec![
+            ("palace".to_string(), 0.2),
+            ("residential".to_string(), 1.5),
+            ("market".to_string(), 0.3),
+            ("workshop".to_string(), 0.4),
+            ("temple".to_string(), 0.1),
+            ("official".to_string(), 0.2),
+            ("tomb".to_string(), 0.1),
+            ("storage".to_string(), 0.2),
+        ]
+    }
+
+    fn sample_buildings() -> Vec<(f64, f64, String)> {
+        vec![
+            (116.001, 34.001, "palace".to_string()),
+            (116.002, 34.002, "residential".to_string()),
+            (116.003, 34.003, "residential".to_string()),
+            (116.004, 34.004, "market".to_string()),
+            (116.005, 34.005, "workshop".to_string()),
+            (116.006, 34.006, "temple".to_string()),
+            (116.007, 34.007, "official".to_string()),
+            (116.008, 34.008, "residential".to_string()),
+            (116.009, 34.009, "residential".to_string()),
+            (116.010, 34.010, "storage".to_string()),
+        ]
+    }
+
+    #[test]
+    fn test_get_zone_density_range_normal() {
+        let (min, max) = get_zone_density_range("residential");
+        assert_eq!(min, 1000.0);
+        assert_eq!(max, 8000.0);
+        assert!(max > min);
+    }
+
+    #[test]
+    fn test_get_zone_density_range_all_types() {
+        let types = [
+            "palace", "residential", "market", "workshop",
+            "temple", "official", "tomb", "storage", "other",
+        ];
+        for t in types {
+            let (min, max) = get_zone_density_range(t);
+            assert!(min >= 0.0, "{} min should be >= 0", t);
+            assert!(max >= min, "{} max should be >= min", t);
+        }
+    }
+
+    #[test]
+    fn test_get_zone_density_range_unknown_defaults() {
+        let (min, max) = get_zone_density_range("unknown_type_xyz");
+        assert_eq!(min, 200.0);
+        assert_eq!(max, 1000.0);
+    }
+
+    #[test]
+    fn test_get_zone_density_range_case_insensitive() {
+        let r1 = get_zone_density_range("Residential");
+        let r2 = get_zone_density_range("RESIDENTIAL");
+        let r3 = get_zone_density_range("residential");
+        assert_eq!(r1, r2);
+        assert_eq!(r2, r3);
+    }
+
+    #[test]
+    fn test_allometric_growth_model_normal_case() {
+        let zones = sample_zones();
+        let buildings = sample_buildings();
+        let result = allometric_growth_model(
+            3.0,
+            50000.0,
+            116.0,
+            34.0,
+            &zones,
+            &buildings,
+        );
+
+        assert_eq!(result.site_id, 0);
+        assert_eq!(result.total_population, 50000.0);
+        assert_eq!(result.model_type, "allometric_growth");
+        assert!(result.confidence > 0.0 && result.confidence <= 1.0);
+        assert!(!result.grid_cells.is_empty());
+        assert_eq!(result.zone_populations.len(), zones.len());
+    }
+
+    #[test]
+    fn test_allometric_growth_model_population_conservation() {
+        let zones = sample_zones();
+        let buildings = sample_buildings();
+        let result = allometric_growth_model(
+            3.0,
+            50000.0,
+            116.0,
+            34.0,
+            &zones,
+            &buildings,
+        );
+
+        let zone_sum: f64 = result.zone_populations.iter().map(|z| z.population).sum();
+        assert_relative_eq!(zone_sum, 50000.0, epsilon = 1.0);
+
+        let pct_sum: f64 = result.zone_populations.iter().map(|z| z.percentage).sum();
+        assert_relative_eq!(pct_sum, 100.0, epsilon = 0.5);
+    }
+
+    #[test]
+    fn test_allometric_growth_model_zone_density_ordering() {
+        let zones = sample_zones();
+        let buildings = sample_buildings();
+        let result = allometric_growth_model(
+            3.0,
+            50000.0,
+            116.0,
+            34.0,
+            &zones,
+            &buildings,
+        );
+
+        let residential = result.zone_populations.iter()
+            .find(|z| z.zone_type == "residential").unwrap();
+        let tomb = result.zone_populations.iter()
+            .find(|z| z.zone_type == "tomb").unwrap();
+        assert!(
+            residential.density > tomb.density,
+            "residential density should exceed tomb density"
+        );
+    }
+
+    #[test]
+    fn test_allometric_growth_model_zero_population() {
+        let zones = sample_zones();
+        let buildings = vec![];
+        let result = allometric_growth_model(
+            3.0,
+            0.0,
+            116.0,
+            34.0,
+            &zones,
+            &buildings,
+        );
+
+        assert!(result.total_population > 0.0, "should fall back to density estimate");
+        assert!(!result.grid_cells.is_empty());
+    }
+
+    #[test]
+    fn test_allometric_growth_model_empty_zones() {
+        let zones: Vec<(String, f64)> = vec![];
+        let buildings = vec![];
+        let result = allometric_growth_model(
+            1.0,
+            10000.0,
+            116.0,
+            34.0,
+            &zones,
+            &buildings,
+        );
+
+        assert!(result.zone_populations.is_empty());
+        assert!(result.grid_cells.is_empty());
+    }
+
+    #[test]
+    fn test_allometric_growth_model_grid_coordinates_bounds() {
+        let zones = sample_zones();
+        let buildings = sample_buildings();
+        let result = allometric_growth_model(
+            3.0,
+            50000.0,
+            116.0,
+            34.0,
+            &zones,
+            &buildings,
+        );
+
+        for cell in &result.grid_cells {
+            assert!(cell.lon >= 115.9 && cell.lon <= 116.1, "lon out of bounds: {}", cell.lon);
+            assert!(cell.lat >= 33.9 && cell.lat <= 34.1, "lat out of bounds: {}", cell.lat);
+            assert!(cell.density >= 0.0, "density should be non-negative");
+            assert!(cell.population >= 0.0, "population should be non-negative");
+        }
+    }
+
+    #[test]
+    fn test_allometric_growth_model_avg_density_reasonable() {
+        let zones = sample_zones();
+        let buildings = sample_buildings();
+        let result = allometric_growth_model(
+            3.0,
+            50000.0,
+            116.0,
+            34.0,
+            &zones,
+            &buildings,
+        );
+
+        let expected_avg = 50000.0 / 3.0;
+        let ratio = result.population_density_avg / expected_avg;
+        assert!(
+            ratio > 0.1 && ratio < 10.0,
+            "avg density {} out of reasonable range (expected ~{})",
+            result.population_density_avg, expected_avg
+        );
+    }
+
+    #[test]
+    fn test_residential_density_model_normal_case() {
+        let zones = sample_zones();
+        let buildings = sample_buildings();
+        let result = residential_density_model(
+            3.0,
+            &buildings,
+            &zones,
+            4.5,
+        );
+
+        assert_eq!(result.model_type, "residential_density");
+        assert!(result.total_population > 0.0);
+        assert!(!result.grid_cells.is_empty());
+    }
+
+    #[test]
+    fn test_residential_density_model_population_per_room() {
+        let zones = sample_zones();
+        let buildings = vec![
+            (116.0, 34.0, "residential".to_string()),
+            (116.001, 34.001, "residential".to_string()),
+        ];
+        let r_low = residential_density_model(1.0, &buildings, &zones, 2.0);
+        let r_high = residential_density_model(1.0, &buildings, &zones, 8.0);
+        assert!(r_high.total_population > r_low.total_population);
+    }
+
+    #[test]
+    fn test_residential_density_model_no_buildings() {
+        let zones = sample_zones();
+        let buildings = vec![];
+        let result = residential_density_model(3.0, &buildings, &zones, 4.5);
+        assert_eq!(result.grid_cells.len(), 0);
+        assert!(result.total_population > 0.0, "should use zone fallback");
+    }
+
+    #[test]
+    fn test_residential_density_model_room_types_non_residential_zero_contribution() {
+        let zones = vec![];
+        let buildings = vec![
+            (116.0, 34.0, "tomb".to_string()),
+            (116.001, 34.001, "storage".to_string()),
+        ];
+        let result = residential_density_model(1.0, &buildings, &zones, 4.5);
+        assert_eq!(result.total_population, 0.0);
+        assert!(result.grid_cells.is_empty());
+    }
+
+    #[test]
+    fn test_residential_density_model_monotonic_with_building_count() {
+        let zones = vec![];
+        let b1 = vec![(116.0, 34.0, "residential".to_string())];
+        let b2 = vec![
+            (116.0, 34.0, "residential".to_string()),
+            (116.001, 34.001, "residential".to_string()),
+            (116.002, 34.002, "residential".to_string()),
+        ];
+        let r1 = residential_density_model(1.0, &b1, &zones, 4.5);
+        let r2 = residential_density_model(1.0, &b2, &zones, 4.5);
+        assert!(r2.total_population > r1.total_population);
+    }
+
+    #[test]
+    fn test_inverse_distance_weighted_normal_case() {
+        let zones = sample_zones();
+        let result = inverse_distance_weighted(
+            116.0,
+            34.0,
+            3.0,
+            50000.0,
+            &zones,
+        );
+
+        assert_eq!(result.model_type, "idw_interpolation");
+        assert_eq!(result.total_population, 50000.0);
+        assert!(!result.grid_cells.is_empty());
+    }
+
+    #[test]
+    fn test_inverse_distance_weighted_center_decay() {
+        let zones = vec![("residential".to_string(), 1.0)];
+        let result = inverse_distance_weighted(
+            116.0,
+            34.0,
+            4.0,
+            20000.0,
+            &zones,
+        );
+
+        let mut center_density = 0.0_f64;
+        let mut edge_density = f64::INFINITY;
+
+        for cell in &result.grid_cells {
+            let dist = ((cell.lon - 116.0).powi(2) + (cell.lat - 34.0).powi(2)).sqrt();
+            if dist < 0.005 {
+                center_density = cell.density;
+            }
+            if dist > 0.02 {
+                edge_density = edge_density.min(cell.density);
+            }
+        }
+
+        assert!(center_density > edge_density, "center {} should be denser than edge {}", center_density, edge_density);
+    }
+
+    #[test]
+    fn test_inverse_distance_weighted_scaling_match() {
+        let zones = sample_zones();
+        let result = inverse_distance_weighted(
+            116.0,
+            34.0,
+            3.0,
+            50000.0,
+            &zones,
+        );
+
+        let grid_sum: f64 = result.grid_cells.iter().map(|c| c.population).sum();
+        let ratio = grid_sum / result.total_population;
+        assert_relative_eq!(ratio, 1.0, epsilon = 0.05);
+    }
+
+    #[test]
+    fn test_inverse_distance_weighted_negative_inputs_safe() {
+        let zones = sample_zones();
+        let result = inverse_distance_weighted(
+            116.0,
+            34.0,
+            3.0,
+            -100.0,
+            &zones,
+        );
+        for cell in &result.grid_cells {
+            assert!(cell.density >= 0.0);
+            assert!(cell.population >= 0.0);
+        }
+    }
+
+    #[test]
+    fn test_inverse_distance_weighted_zone_count_preserved() {
+        let zones = sample_zones();
+        let result = inverse_distance_weighted(
+            116.0,
+            34.0,
+            3.0,
+            50000.0,
+            &zones,
+        );
+        assert_eq!(result.zone_populations.len(), zones.len());
+    }
+
+    #[test]
+    fn test_three_models_different_results_same_input() {
+        let zones = sample_zones();
+        let buildings = sample_buildings();
+
+        let r1 = allometric_growth_model(3.0, 50000.0, 116.0, 34.0, &zones, &buildings);
+        let r2 = residential_density_model(3.0, &buildings, &zones, 4.5);
+        let r3 = inverse_distance_weighted(116.0, 34.0, 3.0, 50000.0, &zones);
+
+        assert_ne!(r1.model_type, r2.model_type);
+        assert_ne!(r2.model_type, r3.model_type);
+        assert_ne!(r1.model_type, r3.model_type);
+
+        assert_ne!(r1.grid_cells.len(), 0);
+        assert_ne!(r3.grid_cells.len(), 0);
+    }
+
+    #[test]
+    fn test_historical_benchmark_changan_like() {
+        let zones = vec![
+            ("palace".to_string(), 1.0),
+            ("residential".to_string(), 6.0),
+            ("market".to_string(), 1.0),
+            ("official".to_string(), 0.8),
+            ("temple".to_string(), 0.2),
+            ("workshop".to_string(), 1.0),
+        ];
+        let buildings = vec![];
+
+        let result = allometric_growth_model(
+            10.0,
+            1000000.0,
+            108.9,
+            34.3,
+            &zones,
+            &buildings,
+        );
+
+        let residential = result.zone_populations.iter()
+            .find(|z| z.zone_type == "residential").unwrap();
+        let palace = result.zone_populations.iter()
+            .find(|z| z.zone_type == "palace").unwrap();
+
+        assert!(residential.population > palace.population);
+        assert!(residential.percentage > 30.0, "residential should dominate, got {}%", residential.percentage);
+        assert!(result.population_density_avg > 50000.0, "Tang Chang'an should be dense");
+        assert!(result.confidence >= 0.6);
+    }
+}

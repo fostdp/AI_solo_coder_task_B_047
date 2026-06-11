@@ -675,3 +675,420 @@ pub async fn get_defense_analysis_handler(
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    fn sample_gates(lon: f64, lat: f64) -> Vec<CityGate> {
+        generate_simulated_gates(lon, lat, 2.0)
+    }
+
+    #[test]
+    fn test_generate_simulated_gates_count() {
+        let gates = generate_simulated_gates(116.0, 34.0, 2.0);
+        assert_eq!(gates.len(), 4);
+    }
+
+    #[test]
+    fn test_generate_simulated_gates_circular_positioning() {
+        let gates = generate_simulated_gates(116.0, 34.0, 2.0);
+        let deg_per_km = 1.0 / 111.0;
+        let expected_radius_deg = 2.0 * deg_per_km;
+
+        for g in &gates {
+            let coords = g.geom.as_ref().unwrap()["coordinates"]
+                .as_array().unwrap();
+            let glon = coords[0].as_f64().unwrap();
+            let glat = coords[1].as_f64().unwrap();
+            let dist_deg = ((glon - 116.0).powi(2) + (glat - 34.0).powi(2)).sqrt();
+            assert_relative_eq!(dist_deg, expected_radius_deg, epsilon = 1e-4);
+        }
+    }
+
+    #[test]
+    fn test_generate_simulated_gates_cardinal_directions() {
+        let gates = generate_simulated_gates(116.0, 34.0, 2.0);
+
+        let east = gates.iter().find(|g| g.name.as_ref().unwrap() == "东门").unwrap();
+        let south = gates.iter().find(|g| g.name.as_ref().unwrap() == "南门").unwrap();
+        let west = gates.iter().find(|g| g.name.as_ref().unwrap() == "西门").unwrap();
+        let north = gates.iter().find(|g| g.name.as_ref().unwrap() == "北门").unwrap();
+
+        let e_coord = east.geom.as_ref().unwrap()["coordinates"].as_array().unwrap();
+        let s_coord = south.geom.as_ref().unwrap()["coordinates"].as_array().unwrap();
+        let w_coord = west.geom.as_ref().unwrap()["coordinates"].as_array().unwrap();
+        let n_coord = north.geom.as_ref().unwrap()["coordinates"].as_array().unwrap();
+
+        assert!(e_coord[0].as_f64().unwrap() > 116.0);
+        assert!(w_coord[0].as_f64().unwrap() < 116.0);
+        assert!(n_coord[1].as_f64().unwrap() > 34.0);
+        assert!(s_coord[1].as_f64().unwrap() < 34.0);
+    }
+
+    #[test]
+    fn test_generate_simulated_gates_valid_geojson() {
+        let gates = generate_simulated_gates(116.0, 34.0, 2.0);
+        for g in &gates {
+            let geom = g.geom.as_ref().unwrap();
+            assert_eq!(geom["type"], "Point");
+            let coords = geom["coordinates"].as_array().unwrap();
+            assert_eq!(coords.len(), 2);
+        }
+    }
+
+    #[test]
+    fn test_generate_simulated_gates_defense_rating_bounded() {
+        let gates = generate_simulated_gates(116.0, 34.0, 2.0);
+        for g in &gates {
+            let r = g.defense_rating.unwrap();
+            assert!(r >= 0.0 && r <= 1.0);
+        }
+    }
+
+    #[test]
+    fn test_generate_wall_segments_count() {
+        use crate::config::algorithm::DEFENSE_WALL_SEGMENTS;
+        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+        assert_eq!(segs.len(), DEFENSE_WALL_SEGMENTS);
+    }
+
+    #[test]
+    fn test_generate_wall_segments_defense_strength_bounded() {
+        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+        for s in &segs {
+            let ds = s["defense_strength"].as_f64().unwrap();
+            let vi = s["visibility_index"].as_f64().unwrap();
+            assert!(ds >= 0.0 && ds <= 1.0);
+            assert!(vi >= 0.0 && vi <= 1.0);
+        }
+    }
+
+    #[test]
+    fn test_generate_wall_segments_indexes_consecutive() {
+        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+        for (i, s) in segs.iter().enumerate() {
+            assert_eq!(s["segment_index"].as_i64().unwrap(), i as i64);
+        }
+    }
+
+    #[test]
+    fn test_generate_wall_segments_closed_loop() {
+        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+        let n = segs.len();
+        for i in 0..n {
+            let cur_end = segs[i]["end"].as_array().unwrap();
+            let next_start = segs[(i + 1) % n]["start"].as_array().unwrap();
+            assert_relative_eq!(
+                cur_end[0].as_f64().unwrap(),
+                next_start[0].as_f64().unwrap(),
+                epsilon = 1e-6
+            );
+            assert_relative_eq!(
+                cur_end[1].as_f64().unwrap(),
+                next_start[1].as_f64().unwrap(),
+                epsilon = 1e-6
+            );
+        }
+    }
+
+    #[test]
+    fn test_analyze_weak_points_identifies_gates() {
+        let gates = sample_gates(116.0, 34.0);
+        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+        let wp = analyze_weak_points(
+            116.0, 34.0, 2.0,
+            &gates, &segs,
+            5.0, 2.0, 10.0,
+            "plain",
+        );
+        let gate_points: Vec<_> = wp.iter().filter(|w| w.category == "gate").collect();
+        assert_eq!(gate_points.len(), gates.len());
+    }
+
+    #[test]
+    fn test_analyze_weak_points_weakness_bounded_0_1() {
+        let gates = sample_gates(116.0, 34.0);
+        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+        let wp = analyze_weak_points(
+            116.0, 34.0, 2.0,
+            &gates, &segs,
+            5.0, 2.0, 10.0,
+            "plain",
+        );
+        for w in &wp {
+            assert!(w.weakness_score >= 0.0 && w.weakness_score <= 1.0);
+            assert!(w.severity >= 0 && w.severity <= 3);
+        }
+    }
+
+    #[test]
+    fn test_analyze_weak_points_terrain_effect_mountain_reduces_weakness() {
+        let gates = sample_gates(116.0, 34.0);
+        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+
+        let wp_mountain = analyze_weak_points(
+            116.0, 34.0, 2.0, &gates, &segs,
+            5.0, 2.0, 0.0, "mountain",
+        );
+        let wp_plain = analyze_weak_points(
+            116.0, 34.0, 2.0, &gates, &segs,
+            5.0, 2.0, 0.0, "plain",
+        );
+
+        let mtn_sum: f64 = wp_mountain.iter().map(|w| w.weakness_score).sum();
+        let pln_sum: f64 = wp_plain.iter().map(|w| w.weakness_score).sum();
+        assert!(mtn_sum < pln_sum, "mountain should reduce weakness ({} < {})", mtn_sum, pln_sum);
+    }
+
+    #[test]
+    fn test_analyze_weak_points_wall_height_reduces_weakness() {
+        let gates = sample_gates(116.0, 34.0);
+        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+
+        let wp_short = analyze_weak_points(
+            116.0, 34.0, 2.0, &gates, &segs,
+            2.0, 1.0, 0.0, "plain",
+        );
+        let wp_tall = analyze_weak_points(
+            116.0, 34.0, 2.0, &gates, &segs,
+            10.0, 3.0, 20.0, "plain",
+        );
+
+        let s_sum: f64 = wp_short.iter().map(|w| w.weakness_score).sum();
+        let t_sum: f64 = wp_tall.iter().map(|w| w.weakness_score).sum();
+        assert!(t_sum < s_sum, "taller walls reduce weakness ({} < {})", t_sum, s_sum);
+    }
+
+    #[test]
+    fn test_compute_attack_routes_count() {
+        let gates = sample_gates(116.0, 34.0);
+        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+        let routes = compute_attack_routes(
+            116.0, 34.0, 2.0,
+            &gates, &segs, "plain",
+        );
+        assert_eq!(routes.len(), algorithm::DEFENSE_NUM_ATTACK_ROUTES);
+    }
+
+    #[test]
+    fn test_compute_attack_routes_starts_outside_wall() {
+        let center_lon = 116.0;
+        let center_lat = 34.0;
+        let radius_km = 2.0;
+        let deg_per_km = 1.0 / 111.0;
+        let radius_deg = radius_km * deg_per_km;
+
+        let gates = sample_gates(center_lon, center_lat);
+        let segs = generate_wall_segments(center_lon, center_lat, radius_km);
+        let routes = compute_attack_routes(
+            center_lon, center_lat, radius_km,
+            &gates, &segs, "plain",
+        );
+
+        for r in &routes {
+            let coords = r.geometry["coordinates"].as_array().unwrap();
+            assert!(coords.len() >= 3, "each route has origin->wall->center");
+
+            let origin = coords[0].as_array().unwrap();
+            let origin_lon = origin[0].as_f64().unwrap();
+            let origin_lat = origin[1].as_f64().unwrap();
+            let d = ((origin_lon - center_lon).powi(2) + (origin_lat - center_lat).powi(2)).sqrt();
+            assert!(d > radius_deg * 0.9, "attack starts outside wall");
+
+            let last = coords.last().unwrap().as_array().unwrap();
+            let last_lon = last[0].as_f64().unwrap();
+            let last_lat = last[1].as_f64().unwrap();
+            assert_relative_eq!(last_lon, center_lon, epsilon = 0.005);
+            assert_relative_eq!(last_lat, center_lat, epsilon = 0.005);
+        }
+    }
+
+    #[test]
+    fn test_compute_attack_routes_scores_ordered() {
+        let gates = sample_gates(116.0, 34.0);
+        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+        let mut routes = compute_attack_routes(
+            116.0, 34.0, 2.0, &gates, &segs, "plain",
+        );
+        routes.sort_by(|a, b| b.attack_score.partial_cmp(&a.attack_score).unwrap());
+
+        for i in 1..routes.len() {
+            assert!(routes[i-1].attack_score >= routes[i].attack_score);
+        }
+    }
+
+    #[test]
+    fn test_compute_attack_routes_feasibility_bounded() {
+        let gates = sample_gates(116.0, 34.0);
+        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+        let routes = compute_attack_routes(
+            116.0, 34.0, 2.0, &gates, &segs, "plain",
+        );
+        for r in &routes {
+            assert!(r.feasibility >= 0.0 && r.feasibility <= 1.0);
+            assert!(r.risk_level >= 0 && r.risk_level <= 3);
+        }
+    }
+
+    #[test]
+    fn test_compute_attack_routes_wetland_increases_risk() {
+        let gates = sample_gates(116.0, 34.0);
+        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+
+        let r_plain = compute_attack_routes(116.0, 34.0, 2.0, &gates, &segs, "plain");
+        let r_wetland = compute_attack_routes(116.0, 34.0, 2.0, &gates, &segs, "wetland");
+
+        let p_feas: f64 = r_plain.iter().map(|r| r.feasibility).sum();
+        let w_feas: f64 = r_wetland.iter().map(|r| r.feasibility).sum();
+        assert!(p_feas > w_feas, "wetland should be less feasible");
+    }
+
+    #[test]
+    fn test_compute_visibility_analysis_count() {
+        let center_lon = 116.0;
+        let center_lat = 34.0;
+        let radius_km = 2.0;
+        let segs = generate_wall_segments(center_lon, center_lat, radius_km);
+        let vis = compute_visibility_analysis(center_lon, center_lat, radius_km, &segs, "plain");
+
+        assert_eq!(vis.len(), algorithm::DEFENSE_NUM_SAMPLE_POINTS);
+    }
+
+    #[test]
+    fn test_compute_visibility_analysis_all_bounded_0_1() {
+        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+        let vis = compute_visibility_analysis(116.0, 34.0, 2.0, &segs, "plain");
+
+        for v in &vis {
+            let vv = v["visibility"].as_f64().unwrap();
+            let cov = v["wall_coverage"].as_f64().unwrap();
+            let exp = v["exposure"].as_f64().unwrap();
+            assert!(vv >= 0.0 && vv <= 1.0);
+            assert!(cov >= 0.0 && cov <= 1.0);
+            assert!(exp >= 0.0 && exp <= 1.0);
+        }
+    }
+
+    #[test]
+    fn test_compute_visibility_analysis_covers_full_360() {
+        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+        let vis = compute_visibility_analysis(116.0, 34.0, 2.0, &segs, "plain");
+
+        let angles: Vec<f64> = vis.iter()
+            .map(|v| v["angle_deg"].as_f64().unwrap())
+            .collect();
+
+        for i in 0..algorithm::DEFENSE_NUM_SAMPLE_POINTS {
+            let expected = (i as f64) * 360.0 / (algorithm::DEFENSE_NUM_SAMPLE_POINTS as f64);
+            assert_relative_eq!(angles[i], expected, epsilon = 0.1);
+        }
+    }
+
+    #[test]
+    fn test_compute_visibility_analysis_mountain_vs_plain() {
+        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+        let v_mtn = compute_visibility_analysis(116.0, 34.0, 2.0, &segs, "mountain");
+        let v_pln = compute_visibility_analysis(116.0, 34.0, 2.0, &segs, "plain");
+
+        let mtn_avg: f64 = v_mtn.iter().map(|v| v["visibility"].as_f64().unwrap()).sum::<f64>()
+            / v_mtn.len() as f64;
+        let pln_avg: f64 = v_pln.iter().map(|v| v["visibility"].as_f64().unwrap()).sum::<f64>()
+            / v_pln.len() as f64;
+
+        assert!(mtn_avg < pln_avg, "mountain reduces visibility");
+    }
+
+    #[test]
+    fn test_compute_accessibility_score_more_gates_higher() {
+        let g2: Vec<CityGate> = sample_gates(116.0, 34.0).into_iter().take(2).collect();
+        let g4 = sample_gates(116.0, 34.0);
+        assert!(compute_accessibility_score(&g4, 2.0) >= compute_accessibility_score(&g2, 2.0));
+    }
+
+    #[test]
+    fn test_compute_accessibility_score_empty_zero() {
+        assert_eq!(compute_accessibility_score(&[], 2.0), 0.0);
+    }
+
+    #[test]
+    fn test_compute_accessibility_score_bounded() {
+        let g = sample_gates(116.0, 34.0);
+        let s = compute_accessibility_score(&g, 2.0);
+        assert!(s >= 0.0 && s <= 1.0);
+    }
+
+    #[test]
+    fn test_compute_overall_defense_score_bounded_0_100() {
+        let gates = sample_gates(116.0, 34.0);
+        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+        let wp = analyze_weak_points(116.0, 34.0, 2.0, &gates, &segs, 5.0, 2.0, 10.0, "plain");
+        let vis = compute_visibility_analysis(116.0, 34.0, 2.0, &segs, "plain");
+        let routes = compute_attack_routes(116.0, 34.0, 2.0, &gates, &segs, "plain");
+        let gate_scores = vec![];
+        let acc = compute_accessibility_score(&gates, 2.0);
+
+        let score = compute_overall_defense_score(5.0, 2.0, 10.0, &wp, &vis, &routes, &gate_scores, acc);
+        assert!(score >= 0.0 && score <= 100.0);
+    }
+
+    #[test]
+    fn test_compute_overall_defense_score_strong_fortress_high_score() {
+        let gates = sample_gates(116.0, 34.0);
+        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+
+        let wp_strong = analyze_weak_points(116.0, 34.0, 2.0, &gates, &segs, 12.0, 5.0, 30.0, "mountain");
+        let vis_strong = compute_visibility_analysis(116.0, 34.0, 2.0, &segs, "mountain");
+        let routes_strong = compute_attack_routes(116.0, 34.0, 2.0, &gates, &segs, "mountain");
+        let acc_strong = compute_accessibility_score(&gates, 2.0);
+        let strong = compute_overall_defense_score(12.0, 5.0, 30.0, &wp_strong, &vis_strong, &routes_strong, &[], acc_strong);
+
+        let wp_weak = analyze_weak_points(116.0, 34.0, 2.0, &gates, &segs, 2.0, 1.0, 0.0, "wetland");
+        let vis_weak = compute_visibility_analysis(116.0, 34.0, 2.0, &segs, "wetland");
+        let routes_weak = compute_attack_routes(116.0, 34.0, 2.0, &gates, &segs, "wetland");
+        let acc_weak = compute_accessibility_score(&gates, 2.0);
+        let weak = compute_overall_defense_score(2.0, 1.0, 0.0, &wp_weak, &vis_weak, &routes_weak, &[], acc_weak);
+
+        assert!(strong > weak, "strong fortress {} should exceed weak one {}", strong, weak);
+        assert!(strong > 60.0, "strong fortress should be >60, got {}", strong);
+        assert!(weak < 80.0, "weak fortress should be <80, got {}", weak);
+    }
+
+    #[test]
+    fn test_analysis_pipeline_end_to_end() {
+        let center_lon = 116.0_f64;
+        let center_lat = 34.0_f64;
+        let radius_km = 2.0_f64;
+        let terrain = "plain";
+        let wall_height = 5.0;
+        let wall_width = 2.0;
+        let moat_width = 8.0;
+
+        let gates = generate_simulated_gates(center_lon, center_lat, radius_km);
+        assert_eq!(gates.len(), 4);
+
+        let segs = generate_wall_segments(center_lon, center_lat, radius_km);
+        assert!(!segs.is_empty());
+
+        let wp = analyze_weak_points(center_lon, center_lat, radius_km, &gates, &segs,
+            wall_height, wall_width, moat_width, terrain);
+        assert!(!wp.is_empty());
+
+        let routes = compute_attack_routes(center_lon, center_lat, radius_km, &gates, &segs, terrain);
+        assert_eq!(routes.len(), algorithm::DEFENSE_NUM_ATTACK_ROUTES);
+
+        let vis = compute_visibility_analysis(center_lon, center_lat, radius_km, &segs, terrain);
+        assert_eq!(vis.len(), algorithm::DEFENSE_NUM_SAMPLE_POINTS);
+
+        let acc = compute_accessibility_score(&gates, radius_km);
+        assert!(acc >= 0.0 && acc <= 1.0);
+
+        let gate_scores = Vec::<GateDefenseScore>::new();
+        let score = compute_overall_defense_score(
+            wall_height, wall_width, moat_width,
+            &wp, &vis, &routes, &gate_scores, acc
+        );
+        assert!(score >= 0.0 && score <= 100.0);
+    }
+}

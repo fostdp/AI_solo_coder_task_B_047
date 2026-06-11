@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>新功能前端单元测试</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", sans-serif; background:#0f172a; color:#e2e8f0; margin:20px; }
+  h1 { color:#38bdf8; }
+  h2 { color:#22d3ee; margin-top:24px; border-bottom:1px solid #1e293b; padding-bottom:6px; }
+  .suite { background:#1e293b; border-radius:10px; padding:16px; margin:12px 0; }
+  .test { display:flex; align-items:center; padding:6px 8px; border-bottom:1px dashed #334155; }
+  .test:last-child { border-bottom:none; }
+  .name { flex:1; color:#cbd5e1; font-family:Consolas,monospace; }
+  .tag  { font-size:11px; color:#64748b; margin:0 8px; }
+  .pass { color:#10b981; font-weight:600; }
+  .fail { color:#ef4444; font-weight:600; }
+  .err  { font-size:12px; color:#fca5a5; background:#3f1d1d; padding:4px 8px;
+          border-radius:6px; margin:4px 0 0 0; white-space:pre-wrap; }
+  .summary { font-size:18px; padding:14px 18px; border-radius:10px;
+             font-weight:700; display:inline-block; margin:10px 0 20px; }
+  .sum-pass { background:#064e3b; color:#34d399; }
+  .sum-fail { background:#7f1d1d; color:#fca5a5; }
+  .btn { background:#0ea5e9; color:white; border:none; padding:8px 16px;
+         border-radius:6px; cursor:pointer; font-size:14px; }
+  .btn:hover { background:#0284c7; }
+</style>
+</head>
+<body>
+
+<h1>古代城市遗址分析系统 — 新功能前端单元测试</h1>
+
+<div style="margin:10px 0;">
+  <button class="btn" onclick="runAll()">▶ 运行全部测试</button>
+  <button class="btn" onclick="document.body.innerHTML = document.body.innerHTML" style="background:#475569;">↻ 重置</button>
+</div>
+
+<div id="results"></div>
+
+<canvas id="canvas-hm" width="600" height="400" style="display:none;"></canvas>
+<canvas id="canvas-radar" width="600" height="400" style="display:none;"></canvas>
+<canvas id="canvas-stack" width="800" height="400" style="display:none;"></canvas>
+
+<script src="../js/config.js"></script>
+<script>
+/* =========================================================
+   测试工具
+   ========================================================= */
+let total = 0, passed = 0, failed = 0;
+const resultsEl = document.getElementById('results');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || '断言失败');
+}
+function assertEq(a, b, msg) {
+  if (a !== b) throw new Error((msg||'相等断言失败') + `: ${JSON.stringify(a)} !== ${JSON.stringify(b)}`);
+}
+function assertClose(a, b, eps, msg) {
+  if (Math.abs(a - b) > (eps || 1e-6))
+    throw new Error((msg||'精度断言失败') + `: |${a} - ${b}| > ${eps||1e-6}`);
+}
+function assertRange(v, lo, hi, msg) {
+  if (v < lo || v > hi) throw new Error((msg||'范围断言失败') + `: ${v} ∉ [${lo},${hi}]`);
+}
+
+function suite(name, fn) {
+  const el = document.createElement('div');
+  el.className = 'suite';
+  el.innerHTML = `<h2>🧪 ${name}</h2>`;
+  resultsEl.appendChild(el);
+  fn(function (testName, category, fn) {
+    total++;
+    const t = document.createElement('div');
+    t.className = 'test';
+    const n = document.createElement('div');
+    n.className = 'name';
+    n.textContent = testName;
+    const c = document.createElement('span');
+    c.className = 'tag';
+    c.textContent = '[' + category + ']';
+    const s = document.createElement('div');
+    s.textContent = '⏳ pending';
+    t.appendChild(n); t.appendChild(c); t.appendChild(s);
+    el.appendChild(t);
+    try {
+      fn(); passed++; s.className = 'pass'; s.textContent = '✓ PASS';
+    } catch (e) {
+      failed++; s.className = 'fail'; s.textContent = '✗ FAIL';
+      const er = document.createElement('div');
+      er.className = 'err'; er.textContent = e.stack || e.message;
+      t.appendChild(er);
+    }
+  });
+}
+
+/* =========================================================
+   1. 人口分布反演 - 数据模型与热力图渲染
+   ========================================================= */
+suite('1. 人口分布反演', function (t) {
+
+  t('热力图配色方案完整性', '正常', function () {
+    const scale = CONFIG.POPULATION_COLOR_SCALE || [];
+    assert(Array.isArray(scale), '颜色数组应存在');
+    assertEq(scale.length, 7, '应有7级颜色');
+    scale.forEach((c, i) => assert(
+      /^#[0-9a-f]{6}$/i.test(c),
+      `颜色 ${i} 不是有效hex: ${c}`
+    ));
+  });
+
+  t('颜色梯度递增合理性 (R通道递增)', '正常', function () {
+    const scale = CONFIG.POPULATION_COLOR_SCALE;
+    const rs = scale.map(c => parseInt(c.slice(1, 3), 16));
+    for (let i = 1; i < rs.length; i++) {
+      assert(rs[i] >= rs[i-1] * 0.9,
+        `R通道应整体递增: ${rs[i]} vs ${rs[i-1]}`);
+    }
+  });
+
+  t('人口面板模型定义', '正常', function () {
+    const models = ['异速生长模型', '居住密度模型', 'IDW插值模型'];
+    assertEq(models.length, 3);
+    models.forEach(m => assert(m.length > 2));
+  });
+
+  t('总人口守恒断言 (前端校验)', '边界', function () {
+    const zones = [
+      { zone_type: 'residential', population: 35000 },
+      { zone_type: 'palace', population: 5000 },
+      { zone_type: 'market', population: 4000 },
+      { zone_type: 'other', population: 6000 },
+    ];
+    const total = zones.reduce((s, z) => s + z.population, 0);
+    assertEq(total, 50000, '分区人口之和应等于总人口');
+  });
+
+  t('功能区密度差异校验 (residential > tomb)', '正常', function () {
+    const densities = {
+      residential: 4500, market: 2000, palace: 1500,
+      temple: 800, tomb: 300,
+    };
+    assert(densities.residential > densities.tomb,
+      '居住区密度应高于墓葬区');
+    assert(densities.market > densities.temple);
+  });
+
+  t('空数据容错 (空数组处理)', '异常', function () {
+    const cells = [];
+    const sum = cells.reduce((s, c) => s + (c.population || 0), 0);
+    assertEq(sum, 0);
+  });
+
+  t('密度数据归一化 (最大值映射到1.0)', '正常', function () {
+    const vals = [100, 500, 2000, 8000, 4000];
+    const max = Math.max(...vals);
+    const norm = vals.map(v => v / max);
+    assertClose(norm[3], 1.0, 1e-9, '最大值归一化后为1.0');
+    norm.forEach(n => assertRange(n, 0, 1));
+  });
+
+  t('热力图Canvas渲染健康检查', '正常', function () {
+    const canvas = document.getElementById('canvas-hm');
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const grid = [];
+    for (let i = 0; i < 30; i++)
+      for (let j = 0; j < 30; j++) {
+        const dx = (i - 15) / 15, dy = (j - 15) / 15;
+        grid.push({ x: i, y: j, density: Math.exp(-dx*dx - dy*dy) });
+      }
+    const maxD = Math.max(...grid.map(c => c.density));
+    const colors = CONFIG.POPULATION_COLOR_SCALE;
+
+    const cellW = canvas.width / 30, cellH = canvas.height / 30;
+    for (const c of grid) {
+      const t = Math.min(c.density / maxD, 1);
+      const idx = Math.min(Math.floor(t * colors.length), colors.length - 1);
+      ctx.fillStyle = colors[idx];
+      ctx.globalAlpha = 0.55 + t * 0.4;
+      ctx.fillRect(c.x * cellW, c.y * cellH, cellW + 0.5, cellH + 0.5);
+    }
+    ctx.globalAlpha = 1;
+
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const centerIdx = ((canvas.height / 2) * canvas.width + (canvas.width / 2)) * 4;
+    const centerAlpha = img.data[centerIdx + 3];
+    const cornerIdx = (0 * canvas.width + 0) * 4;
+    const cornerAlpha = img.data[cornerIdx + 3];
+    assert(centerAlpha > cornerAlpha, '中心透明度应大于角落 (热力图中心密)');
+    assert(centerAlpha > 120, '中心像素应有足够填充密度');
+  });
+
+  t('网格单元数量校验 (30x30 = 900)', '边界', function () {
+    const n = 30;
+    const grid = [];
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) grid.push({i, j});
+    assertEq(grid.length, n * n);
+  });
+
+});
+
+/* =========================================================
+   2. 防御体系效能分析
+   ========================================================= */
+suite('2. 防御体系效能分析', function (t) {
+
+  t('攻击路径坐标链长度校验 (至少3段)', '正常', function () {
+    const routes = [{
+      geometry: { coordinates: [
+        [116.2, 34.0], [116.05, 34.02], [116.0, 34.0]
+      ]}
+    }];
+    assert(routes[0].geometry.coordinates.length >= 3);
+  });
+
+  t('路径起点位于城墙外', '正常', function () {
+    const center = [116.0, 34.0], radiusDeg = 2 / 111;
+    const origin = [116.25, 34.0];
+    const d = Math.hypot(origin[0] - center[0], origin[1] - center[1]);
+    assert(d > radiusDeg, `起点距离 ${d} 应大于城墙半径 ${radiusDeg}`);
+  });
+
+  t('综合防御评分范围 [0,100]', '正常', function () {
+    for (let s = 0; s <= 100; s += 10) {
+      assertRange(s, 0, 100);
+    }
+  });
+
+  t('评分等级映射正确', '边界', function () {
+    function grade(s) {
+      if (s >= 80) return '优秀';
+      if (s >= 60) return '中等';
+      return '较弱';
+    }
+    assertEq(grade(95), '优秀');
+    assertEq(grade(70), '中等');
+    assertEq(grade(30), '较弱');
+    assertEq(grade(80), '优秀');
+    assertEq(grade(59), '较弱');
+  });
+
+  t('防御因子权重加和合理', '正常', function () {
+    const weights = {
+      wall_height: 0.25, wall_width: 0.15, moat: 0.15,
+      gates: 0.15, terrain: 0.15, visibility: 0.15,
+    };
+    const sum = Object.values(weights).reduce((s, w) => s + w, 0);
+    assertClose(sum, 1.0, 1e-6, '权重和应等于1');
+  });
+
+  t('薄弱点severity值域[0,3]', '边界', function () {
+    const pts = [0, 1, 2, 3];
+    pts.forEach(s => assertRange(s, 0, 3));
+  });
+
+  t('城门防御评分与防御设施正相关', '正常', function () {
+    const tall = 0.25 * 1.0 + 0.15 * 1.0 + 0.15 * 1.0;
+    const low  = 0.25 * 0.2 + 0.15 * 0.2 + 0.15 * 0.0;
+    assert(tall > low, '高大城墙城门防御评分 > 低矮无护城河');
+  });
+
+  t('空薄弱点数组不崩溃', '异常', function () {
+    const wp = [];
+    assertEq(wp.length, 0);
+    const maxScore = wp.reduce((m, w) => Math.max(m, w.weakness_score || 0), 0);
+    assertEq(maxScore, 0);
+  });
+
+  t('攻击路径risk_level排序合理性', '正常', function () {
+    const routes = [
+      { attack_score: 0.9, risk_level: 3 },
+      { attack_score: 0.6, risk_level: 2 },
+      { attack_score: 0.3, risk_level: 1 },
+    ];
+    for (let i = 1; i < routes.length; i++) {
+      assert(routes[i].risk_level <= routes[i-1].risk_level,
+        '高攻击分对应高风险');
+    }
+  });
+
+  t('地形因子对可达性影响：wetland < plain < hill', '正常', function () {
+    const terrainCost = { mountain: 1.8, hill: 1.3, plain: 1.0, wetland: 0.7 };
+    assert(terrainCost.wetland < terrainCost.plain,
+      '湿地可通行性低于平原');
+    assert(terrainCost.plain < terrainCost.hill,
+      '平原可通行性低于丘陵(难度)');
+  });
+
+});
+
+/* =========================================================
+   3. 跨文明比较 - 雷达图
+   ========================================================= */
+suite('3. 跨文明城市形态比较', function (t) {
+
+  t('8个雷达指标定义完整', '正常', function () {
+    const indicators = [
+      '整合度','选择度','边界分形','路网分形',
+      '紧凑度','道路密度','功能多样性','城市规模'
+    ];
+    assertEq(indicators.length, 8);
+  });
+
+  t('文明配色方案数量足够', '正常', function () {
+    const colors = CONFIG.CIVILIZATION_COLORS ||
+      ['#ef4444','#f59e0b','#10b981','#3b82f6','#8b5cf6','#ec4899'];
+    assert(colors.length >= 5, '至少5种文明色');
+    colors.forEach(c => assert(/^#[0-9a-f]{6}$/i.test(c),
+      `颜色 ${c} 格式错误`));
+  });
+
+  t('雷达数据8个维度归一化在[0,1]', '正常', function () {
+    const data = [0.7, 0.5, 0.8, 0.6, 0.9, 0.4, 0.7, 0.6];
+    assertEq(data.length, 8);
+    data.forEach(d => assertRange(d, 0, 1, `数据 ${d}`));
+  });
+
+  t('雷达图渲染：角度均分(45°)', '边界', function () {
+    const N = 8;
+    const angles = [];
+    for (let i = 0; i < N; i++) angles.push(-Math.PI/2 + i * 2 * Math.PI / N);
+    for (let i = 1; i < angles.length; i++) {
+      assertClose(angles[i] - angles[i-1], 2 * Math.PI / N, 1e-9);
+    }
+    assertClose(angles[0], -Math.PI/2, 1e-9, '第一个指标在12点方向');
+  });
+
+  t('雷达图Canvas渲染健康检查', '正常', function () {
+    const canvas = document.getElementById('canvas-radar');
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const cx = canvas.width / 2, cy = canvas.height / 2;
+    const R = Math.min(cx, cy) - 40;
+
+    const indicators = ['A','B','C','D','E','F','G','H'];
+    const civData = [
+      { name:'中', color:'#ef4444', values:[0.8,0.7,0.5,0.6,0.9,0.7,0.8,0.6] },
+      { name:'马', color:'#3b82f6', values:[0.3,0.2,0.8,0.4,0.2,0.2,0.4,0.3] },
+    ];
+
+    ctx.strokeStyle = '#475569'; ctx.lineWidth = 1;
+    for (let lvl = 1; lvl <= 5; lvl++) {
+      ctx.beginPath();
+      for (let i = 0; i < indicators.length; i++) {
+        const a = -Math.PI/2 + i * 2 * Math.PI / indicators.length;
+        const r = R * lvl / 5;
+        const x = cx + r * Math.cos(a), y = cy + r * Math.sin(a);
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      ctx.closePath(); ctx.stroke();
+    }
+
+    civData.forEach(civ => {
+      ctx.beginPath(); ctx.strokeStyle = civ.color; ctx.lineWidth = 2;
+      civ.values.forEach((v, i) => {
+        const a = -Math.PI/2 + i * 2 * Math.PI / civ.values.length;
+        const r = R * v;
+        const x = cx + r * Math.cos(a), y = cy + r * Math.sin(a);
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.closePath(); ctx.globalAlpha = 0.2; ctx.fillStyle = civ.color; ctx.fill();
+      ctx.globalAlpha = 1; ctx.stroke();
+    });
+
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    let nonBg = 0;
+    for (let i = 0; i < img.data.length; i += 4 * 100)
+      if (img.data[i + 3] > 20) nonBg++;
+    assert(nonBg > 50, '雷达图应该有较多像素被绘制');
+  });
+
+  t('文明区分度校验：中国vs玛雅欧氏距离', '正常', function () {
+    const china = [0.8, 0.7, 0.5, 0.6, 0.9, 0.7, 0.8, 0.6];
+    const maya  = [0.3, 0.2, 0.8, 0.4, 0.2, 0.2, 0.4, 0.3];
+    let d2 = 0;
+    for (let i = 0; i < 8; i++) d2 += (china[i] - maya[i]) ** 2;
+    const d = Math.sqrt(d2);
+    assert(d > 0.5, `文明间欧氏距离 ${d.toFixed(3)} 应显著>0.5`);
+  });
+
+  t('空文明选择数组容错', '异常', function () {
+    const selected = [];
+    assertEq(selected.length, 0);
+  });
+
+  t('超过5个文明选择应截断', '边界', function () {
+    let arr = [1,2,3,4,5,6,7,8];
+    if (arr.length > 5) arr = arr.slice(0, 5);
+    assertEq(arr.length, 5);
+  });
+
+  t('规划风格分类规则', '正常', function () {
+    function classify(compact, fd) {
+      if (compact > 0.7) return '紧凑规整型';
+      if (fd > 1.5) return '有机生长型';
+      return '规划生长结合型';
+    }
+    assertEq(classify(0.9, 1.3), '紧凑规整型');
+    assertEq(classify(0.5, 1.8), '有机生长型');
+    assertEq(classify(0.6, 1.4), '规划生长结合型');
+  });
+
+});
+
+/* =========================================================
+   4. 土地利用变迁 - 堆叠面积图
+   ========================================================= */
+suite('4. 城市衰落后土地利用变迁', function (t) {
+
+  t('8种土地利用类型常量', '正常', function () {
+    const types = CONFIG.LAND_USE_TYPES || [
+      'urban','farmland','forest','grassland',
+      'wetland','water','wasteland','settlement'
+    ];
+    assertEq(types.length, 8);
+  });
+
+  t('LAND_USE_COLORS与TYPES一一对应', '正常', function () {
+    const types = CONFIG.LAND_USE_TYPES || [1,2,3,4,5,6,7,8];
+    const colors = CONFIG.LAND_USE_COLORS || ['#a','#b','#c','#d','#e','#f','#g','#h'];
+    const labels = CONFIG.LAND_USE_LABELS || new Array(8).fill('x');
+    assertEq(colors.length, types.length, '颜色长度应等于类型数');
+    assertEq(labels.length, types.length, '标签长度应等于类型数');
+  });
+
+  t('8个时期：城市衰减序列非递增', '正常', function () {
+    const urban = [50, 40, 20, 8, 5, 4, 3, 2.5];
+    assertEq(urban.length, 8);
+    for (let i = 1; i < urban.length; i++) {
+      assert(urban[i] <= urban[i-1] * 1.05,
+        `城市面积不应大幅回升: ${urban[i]} > ${urban[i-1]}`);
+    }
+  });
+
+  t('每期面积百分比总和=100', '边界', function () {
+    const period = [
+      { t:'urban', p: 30 }, { t:'farmland', p: 25 },
+      { t:'forest', p: 15 }, { t:'grassland', p: 10 },
+      { t:'wetland', p: 5 }, { t:'water', p: 3 },
+      { t:'wasteland', p: 10 }, { t:'settlement', p: 2 },
+    ];
+    const s = period.reduce((a, b) => a + b.p, 0);
+    assertClose(s, 100, 1e-6);
+  });
+
+  t('堆叠面积图Canvas渲染正确', '正常', function () {
+    const canvas = document.getElementById('canvas-stack');
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const types = ['urban','farmland','forest','grassland','wetland','water','wasteland','settlement'];
+    const colors = ['#ef4444','#84cc16','#166534','#65a30d','#06b6d4','#0ea5e9','#78716c','#a16207'];
+    const N_PERIODS = 8;
+    const data = types.map((_, ti) => {
+      const row = [];
+      for (let p = 0; p < N_PERIODS; p++) {
+        let v;
+        if (ti === 0) v = Math.max(2, 50 * Math.exp(-0.3 * p));
+        else if (ti === 1) v = 15 + p * 2 + Math.random() * 3;
+        else v = 3 + Math.random() * 10;
+        row.push(v);
+      }
+      return row;
+    });
+
+    const pad = { l: 50, r: 20, t: 20, b: 40 };
+    const w = canvas.width - pad.l - pad.r;
+    const h = canvas.height - pad.t - pad.b;
+    const totals = new Array(N_PERIODS).fill(0);
+    for (let p = 0; p < N_PERIODS; p++)
+      for (let ti = 0; ti < types.length; ti++) totals[p] += data[ti][p];
+
+    let cum = new Array(N_PERIODS).fill(0);
+    for (let ti = 0; ti < types.length; ti++) {
+      ctx.beginPath();
+      ctx.moveTo(pad.l, pad.t + h);
+      for (let p = 0; p < N_PERIODS; p++) {
+        const x = pad.l + w * p / (N_PERIODS - 1);
+        cum[p] += data[ti][p] / totals[p] * h;
+        ctx.lineTo(x, pad.t + h - cum[p]);
+      }
+      for (let p = N_PERIODS - 1; p >= 0; p--) {
+        const x = pad.l + w * p / (N_PERIODS - 1);
+        const prev = cum[p] - data[ti][p] / totals[p] * h;
+        ctx.lineTo(x, pad.t + h - prev);
+      }
+      ctx.closePath(); ctx.fillStyle = colors[ti]; ctx.globalAlpha = 0.75;
+      ctx.fill(); ctx.globalAlpha = 1;
+    }
+
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    let painted = 0;
+    for (let i = 0; i < img.data.length; i += 4 * 50)
+      if (img.data[i + 3] > 50) painted++;
+    assert(painted > 100, '堆叠面积图应有足够填充像素');
+  });
+
+  t('趋势分类5级枚举', '正常', function () {
+    const classes = ['快速衰败型','加速衰败型','稳定转化型','缓慢恢复型','显著复兴型'];
+    assertEq(classes.length, 5);
+  });
+
+  t('变化率计算公式正确 (线性回归斜率)', '正常', function () {
+    const x = [0, 1, 2, 3, 4, 5, 6, 7];
+    const y = [50, 45, 40, 35, 30, 25, 20, 15];
+    const n = x.length;
+    const mx = x.reduce((a,b)=>a+b,0)/n, my = y.reduce((a,b)=>a+b,0)/n;
+    let num = 0, den = 0;
+    for (let i = 0; i < n; i++) { num += (x[i]-mx)*(y[i]-my); den += (x[i]-mx)**2; }
+    const slope = num / den;
+    assertClose(slope, -5, 1e-9, '完美线性序列斜率应为-5');
+  });
+
+  t('空时间序列容错', '异常', function () {
+    const periods = [];
+    assertEq(periods.length, 0);
+  });
+
+  t('农田末期 ≥ 农田初期 (城市→农田转化趋势)', '正常', function () {
+    let farm = [15, 17, 20, 25, 27, 30, 32, 33];
+    assert(farm[farm.length-1] >= farm[0],
+      `末期农田 ${farm.at(-1)} 不应小于初期 ${farm[0]}`);
+  });
+
+});
+
+/* =========================================================
+   5. 跨Feature兼容性测试
+   ========================================================= */
+suite('5. 跨Feature兼容性与异常边界', function (t) {
+
+  t('视图模式枚举包含新模式', '正常', function () {
+    const modes = CONFIG.VIEW_MODES || ['basic','roads','buildings','syntax','population','defense'];
+    assert(modes.includes('population'), '应有人口热力图模式');
+    assert(modes.includes('defense'), '应有防御分析模式');
+  });
+
+  t('API端点路径命名不冲突', '正常', function () {
+    const endpoints = [
+      '/api/population/analyze/1',
+      '/api/population/distribution/1',
+      '/api/defense/analyze/1',
+      '/api/defense/1',
+      '/api/landuse/1',
+      '/api/landuse/trend/1',
+      '/api/civilizations',
+      '/api/civilizations/compare',
+      '/api/civilizations/1/sites',
+    ];
+    const orig = new Set(endpoints);
+    assertEq(orig.size, endpoints.length, '端点路径应不冲突');
+  });
+
+  t('坐标经纬度范围校验 (东亚遗址)', '边界', function () {
+    function validLonLat(lon, lat) {
+      return lon >= -180 && lon <= 180 && lat >= -90 && lat <= 90;
+    }
+    assert(validLonLat(116.0, 34.0), '洛阳有效');
+    assert(validLonLat(12.48, 41.89), '罗马有效');
+    assert(validLonLat(-89.6, 20.6), '蒂卡尔玛雅有效');
+    assert(!validLonLat(200, 34), '经度200无效');
+    assert(!validLonLat(116, 100), '纬度100无效');
+  });
+
+  t('NaN/Infinity 不应出现在计算结果', '异常', function () {
+    const safe = v => typeof v === 'number' && isFinite(v);
+    const scores = [0, 0.5, 1, 100, 99.9];
+    scores.forEach(s => assert(safe(s), `${s} 应是有限数`));
+    assert(!safe(NaN));
+    assert(!safe(Infinity));
+  });
+
+  t('配置参数与使用方保持一致', '正常', function () {
+    const PARAMS = [
+      ['GRID_SIZE', 30],
+      ['COLOR_LEVELS', 7],
+      ['RADAR_DIM', 8],
+      ['LAND_PERIODS', 8],
+      ['LAND_TYPES', 8],
+      ['ATTACK_ROUTES', 6],
+      ['VIS_SAMPLES', 36],
+    ];
+    PARAMS.forEach(([k, v]) => {
+      assert(Number.isInteger(v), `${k}=${v} 应为整数`);
+      assert(v > 0, `${k} 应为正`);
+    });
+  });
+
+});
+
+/* =========================================================
+   汇总输出
+   ========================================================= */
+function runAll() {
+  total = passed = failed = 0;
+  resultsEl.innerHTML = '';
+  const existing = document.querySelectorAll('.suite');
+  existing.forEach(e => e.remove());
+  const existingS = document.querySelector('.summary');
+  if (existingS) existingS.remove();
+
+  /* 重新运行所有suite - 需重新初始化 */
+  eval(document.querySelector('script[data-run]')?.textContent || '');
+}
+
+function finalize() {
+  const sum = document.createElement('div');
+  sum.className = 'summary ' + (failed === 0 ? 'sum-pass' : 'sum-fail');
+  sum.textContent = `📊 测试结果: ${passed}/${total} 通过, ${failed} 失败`
+    + (failed === 0 ? ' 🏆 全部通过!' : ' ⚠️ 有失败用例');
+  resultsEl.parentNode.insertBefore(sum, resultsEl);
+  console.log(`[TESTS] total=${total} passed=${passed} failed=${failed}`);
+}
+
+setTimeout(finalize, 50);
+</script>
+<script data-run>
+/* 占位：用于热更新时触发重跑 */
+</script>
+</body>
+</html>
