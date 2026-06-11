@@ -645,3 +645,518 @@ body {
     margin: 4px 0;
     color: #666;
 }
+
+.pop-model-selector {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+}
+
+.pop-model-btn {
+    flex: 1;
+    min-width: 60px;
+    padding: 4px 6px;
+    font-size: 11px;
+    border: 1px solid #ddd;
+    background: #fff;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.pop-model-btn:hover {
+    background: #f0f0f0;
+}
+
+.pop-model-btn.active {
+    background: #3498db;
+    color: #fff;
+    border-color: #3498db;
+}
+
+.population-info .placeholder,
+.defense-info .placeholder,
+.landuse-info .placeholder {
+    color: #999;
+    font-size: 12px;
+    text-align: center;
+    padding: 10px 0;
+}
+
+.pop-summary {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.pop-stat {
+    flex: 1;
+    text-align: center;
+    padding: 8px;
+    background: #f8f9fa;
+    border-radius: 6px;
+}
+
+.pop-stat-value {
+    font-size: 16px;
+    font-weight: 600;
+    color: #e74c3c;
+}
+
+.pop-stat-label {
+    font-size: 10px;
+    color: #7f8c8d;
+    margin-top: 2px;
+}
+
+.pop-model-info {
+    margin-bottom: 8px;
+    font-size: 11px;
+}
+
+.pop-model-info .label {
+    color: #7f8c8d;
+}
+
+.pop-model-info .value {
+    color: #2c3e50;
+    font-weight: 500;
+}
+
+.pop-zones-section {
+    margin-top: 10px;
+}
+
+.pop-zones-section h4 {
+    font-size: 12px;
+    margin-bottom: 8px;
+    color: #2c3e50;
+}
+
+.pop-zone-item {
+    margin-bottom: 6px;
+}
+
+.pop-zone-name {
+    font-size: 11px;
+    color: #2c3e50;
+    display: block;
+    margin-bottom: 2px;
+}
+
+.pop-zone-pop {
+    font-size: 10px;
+    color: #7f8c8d;
+    float: right;
+}
+
+.pop-zone-bar {
+    height: 4px;
+    background: #ecf0f1;
+    border-radius: 2px;
+    overflow: hidden;
+    margin: 2px 0;
+}
+
+.pop-zone-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #3498db, #e74c3c);
+    border-radius: 2px;
+}
+
+.pop-zone-density {
+    font-size: 9px;
+    color: #95a5a6;
+}
+
+.pop-confidence {
+    margin-top: 8px;
+    font-size: 11px;
+}
+
+.pop-confidence .label {
+    color: #7f8c8d;
+}
+
+.pop-confidence .value {
+    color: #27ae60;
+    font-weight: 500;
+}
+
+.defense-score-section {
+    text-align: center;
+    margin-bottom: 12px;
+    padding: 12px;
+    background: #f8f9fa;
+    border-radius: 8px;
+}
+
+.defense-score-circle {
+    width: 60px;
+    height: 60px;
+    border: 3px solid #27ae60;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: baseline;
+    justify-content: center;
+    margin-bottom: 4px;
+}
+
+.defense-score-value {
+    font-size: 22px;
+    font-weight: 700;
+}
+
+.defense-score-label {
+    font-size: 10px;
+    margin-left: 2px;
+}
+
+.defense-score-level {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+
+.defense-score-desc {
+    font-size: 11px;
+    color: #7f8c8d;
+}
+
+.defense-factors,
+.defense-gates,
+.defense-weak-points,
+.defense-attack-routes {
+    margin-top: 10px;
+}
+
+.defense-factors h4,
+.defense-gates h4,
+.defense-weak-points h4,
+.defense-attack-routes h4 {
+    font-size: 12px;
+    margin-bottom: 6px;
+    color: #2c3e50;
+}
+
+.defense-factor-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 0;
+    font-size: 11px;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.defense-factor-name {
+    color: #2c3e50;
+}
+
+.defense-factor-score {
+    color: #27ae60;
+    font-weight: 500;
+}
+
+.defense-factor-weight {
+    color: #95a5a6;
+    font-size: 10px;
+}
+
+.defense-gate-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 0;
+    font-size: 11px;
+}
+
+.defense-gate-name {
+    flex: 0 0 45px;
+    color: #2c3e50;
+}
+
+.defense-gate-bar {
+    flex: 1;
+    height: 4px;
+    background: #ecf0f1;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.defense-gate-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+}
+
+.defense-gate-score {
+    flex: 0 0 30px;
+    text-align: right;
+    color: #7f8c8d;
+    font-size: 10px;
+}
+
+.defense-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0;
+    font-size: 11px;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.defense-item-rank {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #e74c3c;
+    color: #fff;
+    font-size: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.defense-item-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.defense-item-name {
+    color: #2c3e50;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.defense-item-type {
+    font-size: 9px;
+    color: #95a5a6;
+}
+
+.defense-item-score {
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+.defense-route-info {
+    font-size: 11px;
+    color: #7f8c8d;
+}
+
+.landuse-summary {
+    margin-bottom: 8px;
+    font-size: 11px;
+}
+
+.landuse-summary-item {
+    margin-bottom: 2px;
+}
+
+.landuse-summary .label {
+    color: #7f8c8d;
+}
+
+.landuse-summary .value {
+    color: #2c3e50;
+    font-weight: 500;
+}
+
+.landuse-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.landuse-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 9px;
+    color: #2c3e50;
+}
+
+.landuse-legend-color {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+}
+
+.landuse-chart-container {
+    margin-top: 6px;
+    text-align: center;
+}
+
+.landuse-chart-container canvas {
+    max-width: 100%;
+    height: auto;
+}
+
+.btn-small {
+    padding: 4px 8px;
+    font-size: 11px;
+}
+
+.btn-full {
+    width: 100%;
+}
+
+.modal-large {
+    max-width: 900px !important;
+    width: 90%;
+}
+
+.civ-compare-container {
+    display: flex;
+    gap: 20px;
+    min-height: 400px;
+}
+
+.civ-selection {
+    flex: 0 0 250px;
+    border-right: 1px solid #eee;
+    padding-right: 20px;
+}
+
+.civ-selection h3 {
+    font-size: 14px;
+    margin-bottom: 4px;
+    color: #2c3e50;
+}
+
+.civ-selection .hint {
+    font-size: 11px;
+    color: #95a5a6;
+    margin-bottom: 10px;
+}
+
+.civ-selection-list {
+    max-height: 300px;
+    overflow-y: auto;
+    margin-bottom: 10px;
+}
+
+.civ-checkbox-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+.civ-checkbox-item:hover {
+    background: #f8f9fa;
+}
+
+.civ-checkbox-item input {
+    flex-shrink: 0;
+}
+
+.civ-name {
+    flex: 1;
+    color: #2c3e50;
+}
+
+.civ-region {
+    font-size: 10px;
+    color: #95a5a6;
+    flex-shrink: 0;
+}
+
+.civ-result {
+    flex: 1;
+    min-width: 0;
+}
+
+.civ-result h3 {
+    font-size: 14px;
+    margin-bottom: 12px;
+    color: #2c3e50;
+}
+
+.civ-compare-result .placeholder {
+    color: #999;
+    text-align: center;
+    padding: 80px 0;
+    font-size: 13px;
+}
+
+.civ-radar-container {
+    text-align: center;
+    margin-bottom: 15px;
+}
+
+.civ-radar-container canvas {
+    max-width: 100%;
+    height: auto;
+}
+
+.civ-compare-notes {
+    background: #f8f9fa;
+    padding: 12px;
+    border-radius: 6px;
+    margin-bottom: 12px;
+}
+
+.civ-compare-notes h4 {
+    font-size: 13px;
+    margin-bottom: 6px;
+    color: #2c3e50;
+}
+
+.civ-compare-notes p {
+    font-size: 12px;
+    color: #555;
+    line-height: 1.6;
+}
+
+.civ-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: center;
+}
+
+.civ-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: #2c3e50;
+}
+
+.civ-legend-color {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+}
+
+.view-toggle .view-btn {
+    padding: 6px 10px;
+    font-size: 12px;
+}
+
+.error {
+    color: #e74c3c;
+    font-size: 12px;
+    padding: 10px;
+    text-align: center;
+}
+
+.loading {
+    color: #7f8c8d;
+    font-size: 12px;
+    padding: 10px;
+    text-align: center;
+}
+
+.empty {
+    color: #95a5a6;
+    font-size: 11px;
+    text-align: center;
+    padding: 8px 0;
+}

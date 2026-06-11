@@ -29,6 +29,14 @@ pub struct CitySite {
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
     pub dynasty_name: Option<String>,
+    pub civilization_id: Option<i32>,
+    pub civilization_name: Option<String>,
+    pub terrain_type: Option<String>,
+    pub elevation: Option<f64>,
+    pub wall_height: Option<f64>,
+    pub wall_width: Option<f64>,
+    pub moat_width: Option<f64>,
+    pub num_gates: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -218,3 +226,193 @@ impl GeometryUtils {
         })
     }
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Civilization {
+    pub id: i32,
+    pub name: String,
+    pub name_cn: String,
+    pub region: Option<String>,
+    pub time_period: Option<String>,
+    pub description: Option<String>,
+    pub planning_characteristics: Option<String>,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CityGate {
+    pub id: i32,
+    pub site_id: i32,
+    pub name: Option<String>,
+    pub gate_type: Option<String>,
+    pub defense_rating: Option<f64>,
+    pub geom: Option<Value>,
+    pub description: Option<String>,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PopulationDistribution {
+    pub id: i32,
+    pub site_id: i32,
+    pub analysis_id: Option<i32>,
+    pub grid_cell_geom: Option<Value>,
+    pub grid_cell_centroid: Option<Value>,
+    pub population_estimate: Option<f64>,
+    pub density_per_km2: Option<f64>,
+    pub zone_type: Option<String>,
+    pub model_type: Option<String>,
+    pub confidence: Option<f64>,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PopulationAnalysisResult {
+    pub site_id: i32,
+    pub total_population: f64,
+    pub population_density_avg: f64,
+    pub population_density_max: f64,
+    pub model_type: String,
+    pub confidence: f64,
+    pub grid_cells: Vec<PopulationGridCell>,
+    pub zone_populations: Vec<ZonePopulation>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PopulationGridCell {
+    pub lon: f64,
+    pub lat: f64,
+    pub population: f64,
+    pub density: f64,
+    pub zone_type: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ZonePopulation {
+    pub zone_type: String,
+    pub population: f64,
+    pub area_km2: f64,
+    pub density: f64,
+    pub percentage: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DefenseAnalysisResult {
+    pub id: Option<i32>,
+    pub site_id: i32,
+    pub overall_defense_score: f64,
+    pub visibility_analysis: Option<Value>,
+    pub weak_points: Vec<DefenseWeakPoint>,
+    pub optimal_attack_routes: Vec<AttackRoute>,
+    pub accessibility_score: f64,
+    pub gate_defense_scores: Vec<GateDefenseScore>,
+    pub wall_segments: Option<Value>,
+    pub gates: Vec<CityGate>,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DefenseWeakPoint {
+    pub lon: f64,
+    pub lat: f64,
+    pub weakness_score: f64,
+    pub weakness_type: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AttackRoute {
+    pub route_geom: Value,
+    pub start_lon: f64,
+    pub start_lat: f64,
+    pub end_lon: f64,
+    pub end_lat: f64,
+    pub attack_score: f64,
+    pub route_type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GateDefenseScore {
+    pub gate_id: i32,
+    pub gate_name: Option<String>,
+    pub defense_score: f64,
+    pub vulnerability: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LandUseChange {
+    pub id: i32,
+    pub site_id: i32,
+    pub period_name: Option<String>,
+    pub period_year: Option<i32>,
+    pub land_use_type: String,
+    pub area_km2: f64,
+    pub percentage: f64,
+    pub evidence_type: Option<String>,
+    pub confidence: Option<f64>,
+    pub description: Option<String>,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LandUseTimeline {
+    pub site_id: i32,
+    pub periods: Vec<LandUsePeriod>,
+    pub land_use_types: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LandUsePeriod {
+    pub period_name: String,
+    pub period_year: i32,
+    pub land_uses: Vec<LandUseItem>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LandUseItem {
+    pub land_use_type: String,
+    pub area_km2: f64,
+    pub percentage: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CivilizationCompareRequest {
+    pub civilization_ids: Option<Vec<i32>>,
+    pub indicator: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CivilizationComparison {
+    pub civilizations: Vec<CivilizationSummary>,
+    pub indicators: Vec<String>,
+    pub radar_data: Vec<CivilizationRadarData>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CivilizationSummary {
+    pub id: i32,
+    pub name: String,
+    pub name_cn: String,
+    pub region: Option<String>,
+    pub site_count: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CivilizationRadarData {
+    pub civilization_id: i32,
+    pub civilization_name: String,
+    pub values: Vec<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CivilizationAvgMetrics {
+    pub avg_integration_global: f64,
+    pub avg_choice_global: f64,
+    pub avg_boundary_fd: f64,
+    pub avg_road_fd: f64,
+    pub avg_compactness: f64,
+    pub avg_road_density: f64,
+    pub avg_functional_diversity: f64,
+    pub avg_area_sq_km: f64,
+}
+

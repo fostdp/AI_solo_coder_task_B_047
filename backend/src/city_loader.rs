@@ -48,9 +48,13 @@ pub async fn get_city_sites(pool: web::Data<PgPool>) -> Result<HttpResponse, App
                cs.description, cs.archaeological_notes,
                ST_AsGeoJSON(cs.geom)::jsonb as geom_json,
                cs.created_at, cs.updated_at,
-               d.name as dynasty_name
+               d.name as dynasty_name,
+               cs.civilization_id, c.name as civilization_name,
+               cs.terrain_type, cs.elevation,
+               cs.wall_height, cs.wall_width, cs.moat_width, cs.num_gates
         FROM city_sites cs
         JOIN dynasties d ON cs.dynasty_id = d.id
+        LEFT JOIN civilizations c ON cs.civilization_id = c.id
         ORDER BY d.start_year ASC, cs.name ASC
         "#
     )
@@ -74,6 +78,14 @@ pub async fn get_city_sites(pool: web::Data<PgPool>) -> Result<HttpResponse, App
             created_at: row.created_at.map(|dt| dt.and_utc()),
             updated_at: row.updated_at.map(|dt| dt.and_utc()),
             dynasty_name: Some(row.dynasty_name),
+            civilization_id: row.civilization_id,
+            civilization_name: row.civilization_name,
+            terrain_type: row.terrain_type,
+            elevation: row.elevation.map(|v| v as f64),
+            wall_height: row.wall_height.map(|v| v as f64),
+            wall_width: row.wall_width.map(|v| v as f64),
+            moat_width: row.moat_width.map(|v| v as f64),
+            num_gates: row.num_gates,
         })
         .collect();
 
@@ -91,9 +103,13 @@ pub async fn get_city_site_by_id(
                cs.description, cs.archaeological_notes,
                ST_AsGeoJSON(cs.geom)::jsonb as geom_json,
                cs.created_at, cs.updated_at,
-               d.name as dynasty_name
+               d.name as dynasty_name,
+               cs.civilization_id, c.name as civilization_name,
+               cs.terrain_type, cs.elevation,
+               cs.wall_height, cs.wall_width, cs.moat_width, cs.num_gates
         FROM city_sites cs
         JOIN dynasties d ON cs.dynasty_id = d.id
+        LEFT JOIN civilizations c ON cs.civilization_id = c.id
         WHERE cs.id = $1
         "#,
         site_id.into_inner()
@@ -118,6 +134,14 @@ pub async fn get_city_site_by_id(
                 created_at: row.created_at.map(|dt| dt.and_utc()),
                 updated_at: row.updated_at.map(|dt| dt.and_utc()),
                 dynasty_name: Some(row.dynasty_name),
+                civilization_id: row.civilization_id,
+                civilization_name: row.civilization_name,
+                terrain_type: row.terrain_type,
+                elevation: row.elevation.map(|v| v as f64),
+                wall_height: row.wall_height.map(|v| v as f64),
+                wall_width: row.wall_width.map(|v| v as f64),
+                moat_width: row.moat_width.map(|v| v as f64),
+                num_gates: row.num_gates,
             };
             Ok(HttpResponse::Ok().json(ApiResponse::success(site)))
         }
@@ -136,9 +160,13 @@ pub async fn get_sites_by_dynasty(
                cs.description, cs.archaeological_notes,
                ST_AsGeoJSON(cs.geom)::jsonb as geom_json,
                cs.created_at, cs.updated_at,
-               d.name as dynasty_name
+               d.name as dynasty_name,
+               cs.civilization_id, c.name as civilization_name,
+               cs.terrain_type, cs.elevation,
+               cs.wall_height, cs.wall_width, cs.moat_width, cs.num_gates
         FROM city_sites cs
         JOIN dynasties d ON cs.dynasty_id = d.id
+        LEFT JOIN civilizations c ON cs.civilization_id = c.id
         WHERE cs.dynasty_id = $1
         ORDER BY cs.name ASC
         "#,
@@ -164,6 +192,14 @@ pub async fn get_sites_by_dynasty(
             created_at: row.created_at.map(|dt| dt.and_utc()),
             updated_at: row.updated_at.map(|dt| dt.and_utc()),
             dynasty_name: Some(row.dynasty_name),
+            civilization_id: row.civilization_id,
+            civilization_name: row.civilization_name,
+            terrain_type: row.terrain_type,
+            elevation: row.elevation.map(|v| v as f64),
+            wall_height: row.wall_height.map(|v| v as f64),
+            wall_width: row.wall_width.map(|v| v as f64),
+            moat_width: row.moat_width.map(|v| v as f64),
+            num_gates: row.num_gates,
         })
         .collect();
 

@@ -92,5 +92,47 @@ const API = {
 
     compareSites(siteIds) {
         return this.post('/compare', { site_ids: siteIds });
+    },
+
+    analyzePopulation(siteId, model) {
+        let url = `/population/analyze/${siteId}`;
+        if (model) {
+            url += `?model=${model}`;
+        }
+        return this.get(url);
+    },
+
+    getPopulationDistribution(siteId) {
+        return this.get(`/population/distribution/${siteId}`);
+    },
+
+    analyzeDefense(siteId) {
+        return this.get(`/defense/analyze/${siteId}`);
+    },
+
+    getDefenseAnalysis(siteId) {
+        return this.get(`/defense/${siteId}`);
+    },
+
+    getLandUseTimeline(siteId) {
+        return this.get(`/landuse/${siteId}`);
+    },
+
+    getLandUseTrend(siteId) {
+        return this.get(`/landuse/trend/${siteId}`);
+    },
+
+    getCivilizations() {
+        return this.get('/civilizations');
+    },
+
+    compareCivilizations(civilizationIds) {
+        return this.post('/civilizations/compare', {
+            civilization_ids: civilizationIds
+        });
+    },
+
+    getCivilizationSites(civId) {
+        return this.get(`/civilizations/${civId}/sites`);
     }
 };

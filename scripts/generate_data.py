@@ -215,6 +215,25 @@ def generate_city_site(dynasty_id, dynasty_name, city_index, dynasty_idx):
     pop_base = 5000 + dynasty_idx * 8000
     population = int(pop_base * random.uniform(0.6, 1.4))
     
+    terrain_types = ["plain", "hill", "river", "wetland", "mountain"]
+    terrain_weights = [0.5, 0.2, 0.15, 0.1, 0.05]
+    terrain_type = random.choices(terrain_types, weights=terrain_weights)[0]
+    
+    elevation_base = 50
+    if terrain_type == "mountain":
+        elevation_base = 500
+    elif terrain_type == "hill":
+        elevation_base = 200
+    elevation = elevation_base + random.uniform(-20, 50)
+    
+    wall_height = 4.0 + dynasty_idx * 0.3 + random.uniform(0, 3)
+    wall_width = 3.0 + dynasty_idx * 0.25 + random.uniform(0, 2)
+    
+    has_moat = random.random() < 0.6
+    moat_width = random.uniform(3, 15) if has_moat else 0.0
+    
+    num_gates = 4 if dynasty_idx < 10 else random.choice([4, 6, 8, 12])
+    
     city_name = CITY_NAMES[(city_index + dynasty_idx * 2) % len(CITY_NAMES)]
     if city_index > len(CITY_NAMES):
         city_name = f"{dynasty_name}古城{city_index - len(CITY_NAMES)}号"
@@ -233,7 +252,14 @@ def generate_city_site(dynasty_id, dynasty_name, city_index, dynasty_idx):
         "buildings": buildings,
         "location": f"约今{random.choice(['陕西', '河南', '山东', '山西', '河北', '湖北', '江苏', '浙江', '四川', '安徽'])}省境内",
         "description": f"{dynasty_name}时期重要城址，面积约{area_sq_km:.2f}平方公里，人口约{population}人",
-        "notes": f"考古发掘面积约{random.uniform(0.1, 2.0):.2f}平方公里，出土文物{random.randint(100, 5000)}件"
+        "notes": f"考古发掘面积约{random.uniform(0.1, 2.0):.2f}平方公里，出土文物{random.randint(100, 5000)}件",
+        "terrain_type": terrain_type,
+        "elevation": elevation,
+        "wall_height": wall_height,
+        "wall_width": wall_width,
+        "moat_width": moat_width,
+        "num_gates": num_gates,
+        "radius_km": radius_km,
     }
 
 def polygon_to_wkt(points):
@@ -299,8 +325,9 @@ def main():
         cur.execute("""
             INSERT INTO city_sites 
             (name, dynasty_id, location, center_longitude, center_latitude, 
-             estimated_population, area_sq_km, description, archaeological_notes, geom)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             estimated_population, area_sq_km, description, archaeological_notes, geom,
+             civilization_id, terrain_type, elevation, wall_height, wall_width, moat_width, num_gates)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (
             site["name"],
@@ -312,7 +339,14 @@ def main():
             site["area_sq_km"],
             site["description"],
             site["notes"],
-            wall_wkt
+            wall_wkt,
+            1,
+            site["terrain_type"],
+            site["elevation"],
+            site["wall_height"],
+            site["wall_width"],
+            site["moat_width"],
+            site["num_gates"],
         ))
         
         site_id = cur.fetchone()[0]
@@ -460,6 +494,136 @@ def main():
     conn.commit()
     print(f"已插入 {map_count} 条历史地图记录")
     
+    print("插入城门数据...")
+    gate_count = 0
+    for site in all_sites:
+        site_id = site["db_id"]
+        num_gates = site["num_gates"]
+        center_lon = site["center_lon"]
+        center_lat = site["center_lat"]
+        radius_km = site["radius_km"]
+        deg_per_km = 1.0 / 111.0
+        
+        gate_names = ["东门", "南门", "西门", "北门", "东南门", "西南门", "西北门", "东北门",
+                      "东二门", "南二门", "西二门", "北二门"]
+        gate_types = ["main", "main", "main", "main", "secondary", "secondary", "secondary", "secondary",
+                      "tertiary", "tertiary", "tertiary", "tertiary"]
+        
+        for i in range(num_gates):
+            angle = (i * 2 * math.pi / num_gates) - math.pi / 2
+            glon = center_lon + radius_km * deg_per_km * math.cos(angle)
+            glat = center_lat + radius_km * deg_per_km * math.sin(angle)
+            
+            base_defense = 0.6 if gate_types[i] == "main" else 0.5 if gate_types[i] == "secondary" else 0.4
+            defense_rating = base_defense + random.uniform(-0.1, 0.15)
+            
+            point_wkt = point_to_wkt(glon, glat)
+            cur.execute("""
+                INSERT INTO city_gates
+                (site_id, name, gate_type, defense_rating, geom, description)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (
+                site_id,
+                gate_names[i] if i < len(gate_names) else f"城门{i+1}",
+                gate_types[i] if i < len(gate_types) else "secondary",
+                round(defense_rating, 2),
+                point_wkt,
+                f"{site['name']}{gate_names[i] if i < len(gate_names) else f'第{i+1}门'}，为{'主' if gate_types[i] == 'main' else '次'}要城门"
+            ))
+            gate_count += 1
+    
+    conn.commit()
+    print(f"已插入 {gate_count} 座城门")
+    
+    print("插入土地利用变迁数据...")
+    land_use_count = 0
+    land_use_types = [
+        ("urban", "城市建成区"),
+        ("farmland", "农田"),
+        ("forest", "森林"),
+        ("grassland", "草地"),
+        ("wetland", "湿地"),
+        ("water", "水体"),
+        ("wasteland", "荒地"),
+        ("settlement", "居民点"),
+    ]
+    period_names = [
+        "城市鼎盛期", "城市衰落初期", "城市废弃期", "早期农业期",
+        "中期农业期", "近古时期", "近代时期", "现代时期",
+    ]
+    
+    for site in all_sites:
+        site_id = site["db_id"]
+        base_area = site["area_sq_km"]
+        dynasty_idx = site["dynasty_id"] - 1
+        seed = site_id * 0.1
+        
+        for p_idx, period_name in enumerate(period_names):
+            t = p_idx / (len(period_names) - 1)
+            urban_decay = max(0.05, 1.0 - t * 0.75)
+            farmland_growth = min(0.6, 0.1 + t * 0.5 * abs(math.sin(seed * 0.1)))
+            
+            land_uses_pct = {}
+            total_pct = 0.0
+            
+            urban_pct = 0.35 * urban_decay
+            land_uses_pct["urban"] = urban_pct
+            total_pct += urban_pct
+            
+            farmland_pct = farmland_growth
+            land_uses_pct["farmland"] = farmland_pct
+            total_pct += farmland_pct
+            
+            forest_pct = max(0.1, min(0.4, 0.2 + 0.1 * math.sin(t * 2 + seed)))
+            land_uses_pct["forest"] = forest_pct
+            total_pct += forest_pct
+            
+            grassland_pct = max(0.05, min(0.25, 0.15 + 0.1 * math.cos(t * 1.5 + seed)))
+            land_uses_pct["grassland"] = grassland_pct
+            total_pct += grassland_pct
+            
+            wasteland_pct = 0.3 * max(0, 1 - abs(t - 0.35) * 4) if 0.2 < t < 0.5 else 0.1
+            land_uses_pct["wasteland"] = wasteland_pct
+            total_pct += wasteland_pct
+            
+            settlement_pct = max(0.02, (t - 0.5) * 0.2) if t > 0.5 else 0.02
+            land_uses_pct["settlement"] = settlement_pct
+            total_pct += settlement_pct
+            
+            water_pct = 0.05 + 0.03 * math.sin(seed * 0.2)
+            land_uses_pct["water"] = water_pct
+            total_pct += water_pct
+            
+            wetland_pct = max(0.02, 1.0 - total_pct)
+            land_uses_pct["wetland"] = wetland_pct
+            
+            period_year = -500 + p_idx * 300 + int(dynasty_idx * 50)
+            
+            for lu_type, lu_name in land_use_types:
+                pct = land_uses_pct.get(lu_type, 0) * 100
+                area = base_area * land_uses_pct.get(lu_type, 0)
+                
+                cur.execute("""
+                    INSERT INTO land_use_changes
+                    (site_id, period_name, period_year, land_use_type, 
+                     area_km2, percentage, evidence_type, confidence, description)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    site_id,
+                    period_name,
+                    period_year,
+                    lu_type,
+                    round(area, 4),
+                    round(pct, 2),
+                    random.choice(["考古地层", "孢粉分析", "历史文献", "遥感解译", "综合推断"]),
+                    round(random.uniform(0.5, 0.9), 2),
+                    f"{period_name}时期{lu_name}，面积约{area:.2f}平方公里"
+                ))
+                land_use_count += 1
+    
+    conn.commit()
+    print(f"已插入 {land_use_count} 条土地利用变迁记录")
+    
     cur.close()
     conn.close()
     
@@ -471,6 +635,8 @@ def main():
     print(f"建筑基址: {building_count} 座")
     print(f"人口估算: {pop_count} 条")
     print(f"历史地图: {map_count} 条")
+    print(f"城门: {gate_count} 座")
+    print(f"土地利用记录: {land_use_count} 条")
     print("="*60)
 
 if __name__ == "__main__":

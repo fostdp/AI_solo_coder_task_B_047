@@ -264,3 +264,126 @@ CREATE TRIGGER update_city_sites_updated_at
     BEFORE UPDATE ON city_sites
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
+
+-- ========================================
+-- 文明分类表
+-- ========================================
+CREATE TABLE IF NOT EXISTS civilizations (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL UNIQUE,
+    name_cn VARCHAR(100) NOT NULL,
+    region VARCHAR(100),
+    time_period VARCHAR(200),
+    description TEXT,
+    planning_characteristics TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ========================================
+-- 城门表
+-- ========================================
+CREATE TABLE IF NOT EXISTS city_gates (
+    id SERIAL PRIMARY KEY,
+    site_id INTEGER NOT NULL REFERENCES city_sites(id) ON DELETE CASCADE,
+    name VARCHAR(100),
+    gate_type VARCHAR(50),
+    defense_rating NUMERIC(3,2),
+    geom geometry(Point, 4326),
+    description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_city_gates_site_id ON city_gates(site_id);
+CREATE INDEX IF NOT EXISTS idx_city_gates_geom ON city_gates USING GIST (geom);
+
+-- ========================================
+-- 城市遗址表扩展：文明分类与防御属性
+-- ========================================
+ALTER TABLE city_sites ADD COLUMN IF NOT EXISTS civilization_id INTEGER REFERENCES civilizations(id);
+ALTER TABLE city_sites ADD COLUMN IF NOT EXISTS terrain_type VARCHAR(50);
+ALTER TABLE city_sites ADD COLUMN IF NOT EXISTS elevation NUMERIC(8,2);
+ALTER TABLE city_sites ADD COLUMN IF NOT EXISTS wall_height NUMERIC(6,2);
+ALTER TABLE city_sites ADD COLUMN IF NOT EXISTS wall_width NUMERIC(6,2);
+ALTER TABLE city_sites ADD COLUMN IF NOT EXISTS moat_width NUMERIC(6,2);
+ALTER TABLE city_sites ADD COLUMN IF NOT EXISTS num_gates INTEGER;
+
+-- ========================================
+-- 人口分布表（网格化）
+-- ========================================
+CREATE TABLE IF NOT EXISTS population_distributions (
+    id SERIAL PRIMARY KEY,
+    site_id INTEGER NOT NULL REFERENCES city_sites(id) ON DELETE CASCADE,
+    analysis_id INTEGER REFERENCES morphology_analyses(id) ON DELETE SET NULL,
+    grid_cell_geom geometry(Polygon, 4326),
+    grid_cell_centroid geometry(Point, 4326),
+    population_estimate NUMERIC(12,2),
+    density_per_km2 NUMERIC(12,2),
+    zone_type VARCHAR(50),
+    model_type VARCHAR(50),
+    confidence NUMERIC(3,2),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_population_distributions_site_id ON population_distributions(site_id);
+CREATE INDEX IF NOT EXISTS idx_population_distributions_analysis_id ON population_distributions(analysis_id);
+CREATE INDEX IF NOT EXISTS idx_population_distributions_geom ON population_distributions USING GIST (grid_cell_geom);
+
+-- ========================================
+-- 防御体系效能分析表
+-- ========================================
+CREATE TABLE IF NOT EXISTS defense_analyses (
+    id SERIAL PRIMARY KEY,
+    site_id INTEGER NOT NULL REFERENCES city_sites(id) ON DELETE CASCADE,
+    overall_defense_score NUMERIC(5,2),
+    visibility_analysis JSONB,
+    weak_points JSONB,
+    optimal_attack_routes JSONB,
+    accessibility_score NUMERIC(5,2),
+    gate_defense_scores JSONB,
+    wall_segments JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_defense_analyses_site_id ON defense_analyses(site_id);
+
+-- ========================================
+-- 土地利用变迁表
+-- ========================================
+CREATE TABLE IF NOT EXISTS land_use_changes (
+    id SERIAL PRIMARY KEY,
+    site_id INTEGER NOT NULL REFERENCES city_sites(id) ON DELETE CASCADE,
+    period_name VARCHAR(100),
+    period_year INTEGER,
+    land_use_type VARCHAR(50),
+    area_km2 NUMERIC(12,4),
+    percentage NUMERIC(5,2),
+    evidence_type VARCHAR(50),
+    confidence NUMERIC(3,2),
+    description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_land_use_changes_site_id ON land_use_changes(site_id);
+CREATE INDEX IF NOT EXISTS idx_land_use_changes_period ON land_use_changes(period_year);
+CREATE INDEX IF NOT EXISTS idx_land_use_changes_type ON land_use_changes(land_use_type);
+
+-- ========================================
+-- 预置文明分类
+-- ========================================
+INSERT INTO civilizations (name, name_cn, region, time_period, description, planning_characteristics) VALUES
+('Ancient China', '古代中国', 'East Asia', 'c. 1600 BCE - 1912 CE', 
+ '古代中国文明，城市规划受礼制思想影响深远，强调中轴对称、方正布局',
+ '礼制规划、中轴对称、方格路网、里坊制度、风水思想'),
+('Ancient Rome', '古罗马', 'Mediterranean', 'c. 753 BCE - 476 CE',
+ '古罗马文明，城市规划体现工程技术与军事组织能力，注重公共空间',
+ '正交路网、公共广场、输水道、浴场、军事营寨式布局'),
+('Maya', '玛雅', 'Mesoamerica', 'c. 2000 BCE - 1500 CE',
+ '玛雅文明，城市与宗教天文紧密结合，多中心散布式布局',
+ '金字塔神庙、天文观测、散点布局、广场仪式空间、依山就势'),
+('Ancient Egypt', '古埃及', 'North Africa', 'c. 3100 BCE - 30 BCE',
+ '古埃及文明，城市沿尼罗河分布，神庙与陵墓为核心',
+ '沿水分布、神庙中心、陵墓城市、规整网格'),
+('Mesopotamia', '美索不达米亚', 'Middle East', 'c. 3500 BCE - 539 BCE',
+ '两河流域文明，城市以神庙为中心，防御体系发达',
+ '神庙卫城、城墙防御、运河系统、街巷曲折')
+ON CONFLICT (name) DO NOTHING;

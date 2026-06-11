@@ -18,6 +18,10 @@ mod fractal;
 mod mann_kendall;
 mod errors;
 mod metrics;
+mod population;
+mod defense;
+mod land_use;
+mod civilization;
 
 fn init_tracing() {
     tracing_subscriber::registry()
@@ -100,6 +104,15 @@ async fn main() -> std::io::Result<()> {
             .route("/api/trends/analyze", web::post().to(evolution_detector::analyze_trends))
             .route("/api/trends", web::get().to(evolution_detector::get_trends))
             .route("/api/compare", web::post().to(evolution_detector::compare_sites))
+            .route("/api/population/analyze/{site_id}", web::get().to(population::analyze_population_handler))
+            .route("/api/population/distribution/{site_id}", web::get().to(population::get_population_distributions_handler))
+            .route("/api/defense/analyze/{site_id}", web::get().to(defense::analyze_defense_handler))
+            .route("/api/defense/{site_id}", web::get().to(defense::get_defense_analysis_handler))
+            .route("/api/landuse/{site_id}", web::get().to(land_use::get_land_use_timeline_handler))
+            .route("/api/landuse/trend/{site_id}", web::get().to(land_use::get_land_use_trend_handler))
+            .route("/api/civilizations", web::get().to(civilization::get_civilizations_handler))
+            .route("/api/civilizations/compare", web::post().to(civilization::compare_civilizations_handler))
+            .route("/api/civilizations/{id}/sites", web::get().to(civilization::get_civilization_sites_handler))
     })
     .bind(("0.0.0.0", port))?
     .run()

@@ -23,6 +23,7 @@
                     <option value="">选择城市遗址</option>
                 </select>
                 <button id="compareBtn" class="btn btn-primary">朝代对比</button>
+                <button id="civCompareBtn" class="btn btn-secondary">跨文明对比</button>
             </div>
         </header>
 
@@ -51,6 +52,36 @@
                 </div>
 
                 <div class="panel">
+                    <h3>人口分布反演</h3>
+                    <div class="pop-model-selector">
+                        <button class="pop-model-btn active" data-model="allometric">异速生长</button>
+                        <button class="pop-model-btn" data-model="residential">居住密度</button>
+                        <button class="pop-model-btn" data-model="idw">IDW插值</button>
+                    </div>
+                    <div id="populationInfo" class="population-info">
+                        <p class="placeholder">选择城市遗址后查看人口分布</p>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <h3>防御体系分析</h3>
+                    <button id="refreshDefense" class="btn btn-secondary btn-small btn-full">重新分析</button>
+                    <div id="defenseInfo" class="defense-info">
+                        <p class="placeholder">选择城市遗址后查看防御分析</p>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <h3>土地利用变迁</h3>
+                    <div id="landuseInfo" class="landuse-info">
+                        <p class="placeholder">选择城市遗址后查看土地利用变迁</p>
+                    </div>
+                    <div class="landuse-chart-container">
+                        <canvas id="landuseChart" width="260" height="180"></canvas>
+                    </div>
+                </div>
+
+                <div class="panel">
                     <h3>形态分析</h3>
                     <button id="analyzeBtn" class="btn btn-secondary btn-full">开始形态分析</button>
                     <div id="morphologyResult" class="morphology-result">
@@ -67,6 +98,8 @@
                         <button class="view-btn active" data-view="plan">平面图</button>
                         <button class="view-btn" data-view="syntax">空间句法</button>
                         <button class="view-btn" data-view="fractal">分形维数</button>
+                        <button class="view-btn" data-view="population">人口热力</button>
+                        <button class="view-btn" data-view="defense">防御分析</button>
                     </div>
                 </div>
 
@@ -151,6 +184,31 @@
                 </div>
             </div>
         </div>
+
+        <div id="civCompareModal" class="modal hidden">
+            <div class="modal-content modal-large">
+                <div class="modal-header">
+                    <h2>跨文明城市形态对比</h2>
+                    <button class="modal-close" id="civModalClose">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="civ-compare-container">
+                        <div class="civ-selection">
+                            <h3>选择文明</h3>
+                            <p class="hint">最多选择5个文明进行对比</p>
+                            <div id="civSelectionList" class="civ-selection-list"></div>
+                            <button id="startCivCompare" class="btn btn-primary btn-full">开始对比</button>
+                        </div>
+                        <div class="civ-result">
+                            <h3>对比结果</h3>
+                            <div id="civCompareResult" class="civ-compare-result">
+                                <p class="placeholder">选择文明后开始对比</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -161,6 +219,10 @@
     <script src="js/morphology_panel.js"></script>
     <script src="js/trend.js"></script>
     <script src="js/compare.js"></script>
+    <script src="js/population_panel.js"></script>
+    <script src="js/defense_panel.js"></script>
+    <script src="js/landuse_panel.js"></script>
+    <script src="js/civilization_compare.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>

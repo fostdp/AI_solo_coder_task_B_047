@@ -5,6 +5,10 @@ class App {
         this.morphologyPanel = new MorphologyPanel();
         this.trendAnalyzer = new TrendAnalyzer();
         this.compareModal = new CompareModal();
+        this.populationPanel = new PopulationPanel();
+        this.defensePanel = new DefensePanel();
+        this.landUsePanel = new LandUsePanel();
+        this.civilizationCompare = new CivilizationCompare();
         
         this.dynasties = [];
         this.allSites = [];
@@ -15,9 +19,21 @@ class App {
         this.cityMap.init();
         this.morphologyPanel.init();
         this.trendAnalyzer.init();
+        this.populationPanel.init();
+        this.defensePanel.init();
+        this.landUsePanel.init();
+        this.civilizationCompare.init();
 
         this.cityMap.setOnZoneClick((zone) => this.showZoneDetail(zone));
         this.cityMap.setOnBuildingClick((building) => this.showBuildingDetail(building));
+
+        this.populationPanel.onDataLoaded = (data) => {
+            this.cityMap.setPopulationData(data);
+        };
+
+        this.defensePanel.onDataLoaded = (data) => {
+            this.cityMap.setDefenseData(data);
+        };
 
         try {
             this.dynasties = await API.getDynasties();
@@ -51,6 +67,10 @@ class App {
             if (site) {
                 this.selectSite(site);
             }
+        });
+
+        window.addEventListener('resize', () => {
+            this.landUsePanel.resize();
         });
     }
 
@@ -90,6 +110,9 @@ class App {
             this.currentSite = null;
             this.updateSiteInfo(null);
             this.morphologyPanel.setSite(null);
+            this.populationPanel.setSite(null);
+            this.defensePanel.setSite(null);
+            this.landUsePanel.setSite(null);
         }
     }
 
@@ -105,8 +128,15 @@ class App {
         this.cityMap.loadSite(site);
         this.updateSiteInfo(site);
         this.morphologyPanel.setSite(site.id);
+        this.populationPanel.setSite(site.id);
+        this.defensePanel.setSite(site.id);
+        this.landUsePanel.setSite(site.id);
         
         this.clearDetailPanels();
+        
+        setTimeout(() => {
+            this.landUsePanel.resize();
+        }, 100);
     }
 
     updateSiteInfo(site) {

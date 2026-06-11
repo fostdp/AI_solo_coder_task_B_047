@@ -65,6 +65,52 @@ const CONFIG = {
         MAP_MIN_ZOOM: 8,
         MAP_MAX_ZOOM: 18,
         FRACTAL_GRID_LEVELS_HIGH: [1, 2, 4, 8, 16],
-        FRACTAL_GRID_LEVELS_LOW: [1, 2, 4, 8]
-    }
+        FRACTAL_GRID_LEVELS_LOW: [1, 2, 4, 8],
+        POPULATION_HEATMAP_OPACITY: 0.7,
+        POPULATION_GRID_SIZE: 0.002,
+        DEFENSE_ATTACK_ROUTE_COLOR: '#e74c3c',
+        DEFENSE_WEAK_POINT_COLOR: '#e67e22',
+        DEFENSE_GATE_COLOR: '#8e44ad'
+    },
+
+    POPULATION_COLOR_SCALE: [
+        '#ffffb2', '#fed976', '#feb24c', '#fd8d3c',
+        '#fc4e2a', '#e31a1c', '#b10026'
+    ],
+
+    LAND_USE_COLORS: {
+        'urban': '#e74c3c',
+        'farmland': '#27ae60',
+        'forest': '#2ecc71',
+        'grassland': '#f1c40f',
+        'wetland': '#3498db',
+        'water': '#2980b9',
+        'wasteland': '#95a5a6',
+        'settlement': '#e67e22',
+        'default': '#7f8c8d'
+    },
+
+    LAND_USE_LABELS: {
+        'urban': '城市建成区',
+        'farmland': '农田',
+        'forest': '森林',
+        'grassland': '草地',
+        'wetland': '湿地',
+        'water': '水体',
+        'wasteland': '荒地',
+        'settlement': '居民点'
+    },
+
+    CIVILIZATION_COLORS: [
+        '#e74c3c', '#3498db', '#27ae60', '#f39c12', '#9b59b6',
+        '#1abc9c', '#e67e22', '#34495e'
+    ],
+
+    VIEW_MODES: [
+        { id: 'plan', name: '平面图', icon: '🗺️' },
+        { id: 'syntax', name: '空间句法', icon: '🔗' },
+        { id: 'fractal', name: '分形维数', icon: '🔲' },
+        { id: 'population', name: '人口热力', icon: '👥' },
+        { id: 'defense', name: '防御分析', icon: '🏰' }
+    ]
 };

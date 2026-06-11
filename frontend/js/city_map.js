@@ -7,12 +7,16 @@ class CityMap {
         this.zonesLayer = null;
         this.buildingsLayer = null;
         this.syntaxLayer = null;
+        this.populationLayer = null;
+        this.defenseLayer = null;
         this.canvasRenderer = null;
         this.currentView = 'plan';
         this.zonesData = [];
         this.roadsData = [];
         this.buildingsData = [];
         this.roadSyntaxData = [];
+        this.populationData = null;
+        this.defenseData = null;
         this.onZoneClick = null;
         this.onBuildingClick = null;
         this.renderFrame = null;
@@ -44,6 +48,8 @@ class CityMap {
         this.zonesLayer = L.layerGroup().addTo(this.map);
         this.buildingsLayer = L.layerGroup().addTo(this.map);
         this.syntaxLayer = L.layerGroup().addTo(this.map);
+        this.populationLayer = L.layerGroup().addTo(this.map);
+        this.defenseLayer = L.layerGroup().addTo(this.map);
 
         this.setupLayerControls();
         this.setupPerformanceEvents();
@@ -257,14 +263,22 @@ class CityMap {
     switchView(view) {
         this.currentView = view;
 
+        this.syntaxLayer.clearLayers();
+        this.populationLayer.clearLayers();
+        this.defenseLayer.clearLayers();
+
         if (view === 'plan') {
             this.wallsLayer.eachLayer(l => l.setStyle ? l.setStyle({ opacity: 1 }) : null);
-            this.syntaxLayer.clearLayers();
+            this.buildingsLayer.eachLayer(l => l.setStyle ? l.setStyle({ opacity: 1 }) : null);
             this.scheduleRender();
         } else if (view === 'syntax') {
             this.renderSyntaxView();
         } else if (view === 'fractal') {
             this.renderFractalView();
+        } else if (view === 'population') {
+            this.renderPopulationHeatmap();
+        } else if (view === 'defense') {
+            this.renderDefenseAnalysis();
         }
     }
 
@@ -334,6 +348,10 @@ class CityMap {
         this.zonesLayer.clearLayers();
         this.buildingsLayer.clearLayers();
         this.syntaxLayer.clearLayers();
+        this.populationLayer.clearLayers();
+        this.defenseLayer.clearLayers();
+        this.populationData = null;
+        this.defenseData = null;
     }
 
     drawWalls(geom) {
@@ -575,5 +593,175 @@ class CityMap {
 
     setOnBuildingClick(callback) {
         this.onBuildingClick = callback;
+    }
+
+    setPopulationData(data) {
+        this.populationData = data;
+        if (this.currentView === 'population') {
+            this.populationLayer.clearLayers();
+            this.renderPopulationHeatmap();
+        }
+    }
+
+    setDefenseData(data) {
+        this.defenseData = data;
+        if (this.currentView === 'defense') {
+            this.defenseLayer.clearLayers();
+            this.renderDefenseAnalysis();
+        }
+    }
+
+    getColorFromScale(value, maxValue, colors) {
+        if (value <= 0 || maxValue <= 0) return colors[0];
+        const ratio = Math.min(value / maxValue, 1);
+        const idx = Math.floor(ratio * (colors.length - 1));
+        return colors[Math.min(idx, colors.length - 1)];
+    }
+
+    renderPopulationHeatmap() {
+        if (!this.populationData || !this.populationData.grid_cells) return;
+        if (!this.currentSite) return;
+
+        const gridCells = this.populationData.grid_cells;
+        const colors = CONFIG.POPULATION_COLOR_SCALE;
+        const opacity = CONFIG.RENDER.POPULATION_HEATMAP_OPACITY;
+        const gridSize = CONFIG.RENDER.POPULATION_GRID_SIZE || 0.002;
+        const halfGrid = gridSize / 2;
+
+        let maxDensity = 0;
+        gridCells.forEach(cell => {
+            if (cell.density > maxDensity) {
+                maxDensity = cell.density;
+            }
+        });
+
+        gridCells.forEach(cell => {
+            const color = this.getColorFromScale(cell.density, maxDensity, colors);
+            const lon = cell.lon;
+            const lat = cell.lat;
+
+            const latlngs = [
+                [lat + halfGrid, lon - halfGrid],
+                [lat + halfGrid, lon + halfGrid],
+                [lat - halfGrid, lon + halfGrid],
+                [lat - halfGrid, lon - halfGrid]
+            ];
+
+            const rect = L.rectangle(latlngs, {
+                renderer: this.canvasRenderer,
+                fillColor: color,
+                fillOpacity: opacity,
+                color: color,
+                weight: 0,
+                stroke: false
+            }).addTo(this.populationLayer);
+
+            rect.bindTooltip(`人口密度: ${cell.density.toFixed(0)} 人/km²<br>估算人口: ${cell.population.toFixed(0)} 人<br>${cell.zone_type ? '功能区: ' + cell.zone_type : ''}`);
+        });
+    }
+
+    renderDefenseAnalysis() {
+        if (!this.defenseData) return;
+        if (!this.currentSite) return;
+
+        this.renderAttackRoutes();
+        this.renderWeakPoints();
+        this.renderGatesDefense();
+    }
+
+    renderAttackRoutes() {
+        if (!this.defenseData.optimal_attack_routes) return;
+
+        const routes = this.defenseData.optimal_attack_routes;
+        const colors = ['#e74c3c', '#e67e22', '#f39c12', '#9b59b6', '#3498db', '#27ae60'];
+
+        routes.forEach((route, idx) => {
+            if (!route.route_geom || !route.route_geom.coordinates) return;
+
+            const color = colors[idx % colors.length];
+            const latlngs = route.route_geom.coordinates.map(c => [c[1], c[0]]);
+            const isOptimal = idx === 0;
+
+            const line = L.polyline(latlngs, {
+                renderer: this.canvasRenderer,
+                color: color,
+                weight: 3,
+                opacity: 0.8,
+                dashArray: isOptimal ? null : '5, 5'
+            }).addTo(this.defenseLayer);
+
+            line.bindTooltip(`攻击路径 ${idx + 1}<br>危险程度: ${(route.attack_score * 100).toFixed(0)}%<br>类型: ${route.route_type || ''}`);
+        });
+    }
+
+    renderWeakPoints() {
+        if (!this.defenseData.weak_points) return;
+
+        this.defenseData.weak_points.forEach((wp, idx) => {
+            const marker = L.circleMarker([wp.lat, wp.lon], {
+                radius: 6 + Math.min(4, wp.weakness_score * 5),
+                fillColor: '#e74c3c',
+                color: '#c0392b',
+                weight: 2,
+                fillOpacity: 0.8
+            }).addTo(this.defenseLayer);
+
+            marker.bindTooltip(`薄弱点 ${idx + 1}<br>类型: ${wp.weakness_type}<br>脆弱度: ${(wp.weakness_score * 100).toFixed(0)}%<br>${wp.description || ''}`);
+        });
+    }
+
+    renderGatesDefense() {
+        if (!this.defenseData.gate_defense_scores) return;
+        if (!this.defenseData.gates && !this.defenseData.gate_defense_scores) return;
+
+        const gates = this.defenseData.gates || [];
+        const gateScores = this.defenseData.gate_defense_scores || [];
+
+        if (gates.length > 0) {
+            gates.forEach(gate => {
+                if (!gate.geom || !gate.geom.coordinates) return;
+
+                const scoreObj = gateScores.find(s => s.gate_id === gate.id || s.gate_name === gate.name);
+                const defenseScore = scoreObj?.defense_score ?? gate.defense_rating ?? 0.5;
+
+                let color = '#27ae60';
+                if (defenseScore < 0.4) color = '#e74c3c';
+                else if (defenseScore < 0.7) color = '#f39c12';
+
+                const marker = L.circleMarker([gate.geom.coordinates[1], gate.geom.coordinates[0]], {
+                    radius: 6,
+                    fillColor: color,
+                    color: '#2c3e50',
+                    weight: 1.5,
+                    fillOpacity: 0.9
+                }).addTo(this.defenseLayer);
+
+                marker.bindTooltip(`城门：${gate.name}<br>类型: ${gate.gate_type}<br>防御评分: ${(defenseScore * 100).toFixed(0)}`);
+            });
+        } else {
+            gateScores.forEach((gs, idx) => {
+                const defenseScore = gs.defense_score;
+                let color = '#27ae60';
+                if (defenseScore < 0.4) color = '#e74c3c';
+                else if (defenseScore < 0.7) color = '#f39c12';
+
+                const angle = (idx * 2 * Math.PI / gateScores.length) - Math.PI / 2;
+                const site = this.currentSite;
+                const radius = site?.area_sq_km ? Math.sqrt(site.area_sq_km / Math.PI) : 1;
+                const degPerKm = 1 / 111;
+                const glon = (site?.center_longitude || 116) + radius * degPerKm * Math.cos(angle);
+                const glat = (site?.center_latitude || 34) + radius * degPerKm * Math.sin(angle);
+
+                const marker = L.circleMarker([glat, glon], {
+                    radius: 6,
+                    fillColor: color,
+                    color: '#2c3e50',
+                    weight: 1.5,
+                    fillOpacity: 0.9
+                }).addTo(this.defenseLayer);
+
+                marker.bindTooltip(`城门：${gs.gate_name || `第${idx + 1}门`}<br>防御评分: ${(defenseScore * 100).toFixed(0)}`);
+            });
+        }
     }
 }
