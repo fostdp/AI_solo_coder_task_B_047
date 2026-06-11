@@ -53,7 +53,7 @@ fn it_zoo_population_model_consistency() {
 
     let allo = allometric_growth_model(3.0, 50000.0, 116.0, 34.0, &zones, &buildings);
     let dens = residential_density_model(3.0, &buildings, &zones, 4.5);
-    let idw  = inverse_distance_weighted(116.0, 34.0, 3.0, 50000.0, &zones);
+    let idw  = inverse_distance_weighted(116.0, 34.0, 3.0, 50000.0, &zones, &buildings);
 
     assert_eq!(allo.total_population, 50000.0);
     assert_eq!(idw.total_population, 50000.0);

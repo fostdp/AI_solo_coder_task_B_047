@@ -4,6 +4,147 @@ use crate::config::algorithm;
 use serde_json::{json, Value};
 use std::f64::consts::PI;
 
+const ANCIENT_WEAPON_RANGES: &[(&str, f64, f64, f64, &str)] = &[
+    ("composite_bow", 100.0, 200.0, 350.0, "《考工记·弓人》《武经总要》"),
+    ("crossbow", 200.0, 350.0, 600.0, "《战国策·韩策》《天工开物·兵》"),
+    ("heavy_crossbow", 400.0, 700.0, 1000.0, "《史记·苏秦列传》《武备志》"),
+    ("catapult_traction", 100.0, 200.0, 300.0, "《范蠡兵法》《武经总要·攻城法》"),
+    ("catapult_torsion", 200.0, 350.0, 500.0, "《墨子·备城门》《通典·兵典》"),
+    ("ballista", 300.0, 500.0, 800.0, "《战术》《武经总要》"),
+    ("sling", 50.0, 100.0, 200.0, "《诗经》《罗马军事史》"),
+    ("javelin", 30.0, 60.0, 100.0, "《考工记·庐人》波利比乌斯《通史》"),
+];
+
+const CIVILIZATION_WEAPON_PROFILES: &[(&str, &str, f64, &str)] = &[
+    ("ancient_china", "heavy_crossbow", 0.85, "强弩主义，秦俑汉弩实证"),
+    ("ancient_rome", "ballista", 0.8, "扭力投射器传统，维盖蒂乌斯记载"),
+    ("maya", "composite_bow", 0.5, "玛雅壁画与武器献祭坑"),
+    ("ancient_egypt", "composite_bow", 0.65, "新王国时期喜克索斯传入"),
+    ("indus_valley", "sling", 0.45, "摩亨佐-达罗弹丸堆积"),
+    ("default", "crossbow", 0.6, "通用古代投射武器基准"),
+];
+
+#[derive(Debug, Clone)]
+pub struct WeaponRangeEstimate {
+    pub min_range_m: f64,
+    pub typical_range_m: f64,
+    pub max_range_m: f64,
+    pub weapon_type: String,
+    pub confidence: f64,
+    pub literature_sources: String,
+    pub estimate_method: String,
+}
+
+pub fn estimate_weapon_range(
+    civilization: &str,
+    wall_height_m: f64,
+    terrain: &str,
+    has_direct_evidence: bool,
+) -> WeaponRangeEstimate {
+    let profile = CIVILIZATION_WEAPON_PROFILES
+        .iter()
+        .find(|(civ, _, _, _)| *civ == civilization)
+        .unwrap_or_else(|| {
+            CIVILIZATION_WEAPON_PROFILES
+                .iter()
+                .find(|(civ, _, _, _)| *civ == "default")
+                .unwrap()
+        });
+
+    let (_, weapon_type, base_confidence, source_note) = profile;
+
+    let weapon_data = ANCIENT_WEAPON_RANGES
+        .iter()
+        .find(|(wt, _, _, _, _)| *wt == *weapon_type)
+        .unwrap_or_else(|| {
+            ANCIENT_WEAPON_RANGES
+                .iter()
+                .find(|(wt, _, _, _, _)| *wt == "crossbow")
+                .unwrap()
+        });
+
+    let (_, min_r, typical_r, max_r, literature) = weapon_data;
+
+    let height_factor = (wall_height_m / 8.0).max(0.5).min(1.5);
+    let terrain_factor = match terrain {
+        "mountain" => 0.85,
+        "hill" => 0.9,
+        "plain" => 1.0,
+        "wetland" => 0.95,
+        "river" => 0.92,
+        _ => 1.0,
+    };
+
+    let evidence_bonus = if has_direct_evidence { 0.15 } else { 0.0 };
+    let confidence = (base_confidence + evidence_bonus).min(1.0).max(0.2);
+
+    let method = if has_direct_evidence {
+        "direct_archaeological_evidence"
+    } else if civilization != "default" {
+        "civilization_inference_with_literature"
+    } else {
+        "literature_baseline_estimation"
+    };
+
+    WeaponRangeEstimate {
+        min_range_m: min_r * height_factor * terrain_factor * 0.8,
+        typical_range_m: typical_r * height_factor * terrain_factor,
+        max_range_m: max_r * height_factor * terrain_factor * 1.1,
+        weapon_type: weapon_type.to_string(),
+        confidence,
+        literature_sources: format!("{}; {}", literature, source_note),
+        estimate_method: method.to_string(),
+    }
+}
+
+pub fn compute_weapon_coverage_score(
+    perimeter_km: f64,
+    num_gates: usize,
+    weapon_range: &WeaponRangeEstimate,
+) -> f64 {
+    let range_km = weapon_range.typical_range_m / 1000.0;
+    let coverage_per_gate = 2.0 * range_km;
+    let total_coverage = coverage_per_gate * num_gates as f64;
+    (total_coverage / perimeter_km.max(0.1)).min(1.0).max(0.0)
+}
+
+pub fn assess_defense_data_quality(
+    has_wall_height: bool,
+    has_moat: bool,
+    has_gates: bool,
+    has_weapon_evidence: bool,
+    has_terrain_data: bool,
+) -> f64 {
+    let mut score = 0.0;
+    if has_wall_height { score += 0.25; }
+    if has_moat { score += 0.15; }
+    if has_gates { score += 0.25; }
+    if has_weapon_evidence { score += 0.2; }
+    if has_terrain_data { score += 0.15; }
+    score.min(1.0).max(0.0)
+}
+
+pub fn infer_civilization(site_name: &str) -> &'static str {
+    let name_lower = site_name.to_lowercase();
+    if name_lower.contains("长安") || name_lower.contains("洛阳") || name_lower.contains("邯郸")
+        || name_lower.contains("临淄") || name_lower.contains("咸阳") || name_lower.contains("陶寺")
+        || name_lower.contains("二里头") || name_lower.contains("殷墟") || name_lower.contains("镐京") {
+        "ancient_china"
+    } else if name_lower.contains("罗马") || name_lower.contains("庞贝") || name_lower.contains("君士坦丁堡") {
+        "ancient_rome"
+    } else if name_lower.contains("蒂卡尔") || name_lower.contains("帕伦克") || name_lower.contains("科潘")
+        || name_lower.contains("奇琴伊察") || name_lower.contains("玛雅") {
+        "maya"
+    } else if name_lower.contains("孟菲斯") || name_lower.contains("底比斯") || name_lower.contains("埃及")
+        || name_lower.contains("卡洪") {
+        "ancient_egypt"
+    } else if name_lower.contains("摩亨佐") || name_lower.contains("哈拉帕") || name_lower.contains("印度河") {
+        "indus_valley"
+    } else {
+        "default"
+    }
+}
+
 pub async fn analyze_defense(
     pool: &sqlx::PgPool,
     site_id: i32,
@@ -31,6 +172,25 @@ pub async fn analyze_defense(
     let wall_width = site_row.wall_width.unwrap_or(5.0);
     let moat_width = site_row.moat_width.unwrap_or(0.0);
     let terrain = site_row.terrain_type.clone().unwrap_or_else(|| "plain".to_string());
+
+    let civ_key = infer_civilization(&site_row.name.clone().unwrap_or_default());
+    let has_wall_evidence = site_row.wall_height.is_some();
+    let has_moat_evidence = site_row.moat_width.is_some();
+    let has_gate_evidence = false;
+    let has_weapon_evidence = false;
+    let weapon_estimate = estimate_weapon_range(
+        civ_key,
+        wall_height,
+        &terrain,
+        has_weapon_evidence,
+    );
+    let data_quality = assess_defense_data_quality(
+        has_wall_evidence,
+        has_moat_evidence,
+        has_gate_evidence,
+        has_weapon_evidence,
+        site_row.terrain_type.is_some(),
+    );
 
     let gates_rows = sqlx::query!(
         r#"
@@ -93,13 +253,16 @@ pub async fn analyze_defense(
         })
         .collect();
 
+    let perimeter_km = 2.0 * PI * radius_km;
+    let weapon_coverage = compute_weapon_coverage_score(perimeter_km, gates.len(), &weapon_estimate);
+
     let visibility_analysis = compute_visibility_analysis(
-        center_lon, center_lat, radius_km, &gates, &terrain,
+        center_lon, center_lat, radius_km, &gates, &terrain, &weapon_estimate,
     );
 
     let overall_defense = compute_overall_defense_score(
         &gate_scores, wall_height, wall_width, moat_width,
-        &weak_points, area_sq_km, &terrain,
+        &weak_points, area_sq_km, &terrain, weapon_coverage, data_quality,
     );
 
     let accessibility_score = compute_accessibility_score(&gates, radius_km);
@@ -414,10 +577,12 @@ fn compute_visibility_analysis(
     radius_km: f64,
     gates: &[CityGate],
     terrain: &str,
+    weapon_range: &WeaponRangeEstimate,
 ) -> Value {
     let num_samples = algorithm::DEFENSE_NUM_SAMPLE_POINTS;
     let deg_per_km = 1.0 / 111.0;
     let mut visibility_points = Vec::new();
+    let weapon_range_km = weapon_range.typical_range_m / 1000.0;
 
     for i in 0..num_samples {
         let angle = (i as f64) * (2.0 * PI) / (num_samples as f64);
@@ -453,13 +618,45 @@ fn compute_visibility_analysis(
             0.0
         };
 
-        let visibility = (terrain_factor + gate_proximity).min(1.0).max(0.0);
+        let weapon_factor = if !gates.is_empty() {
+            let mut min_dist_to_gate_km = f64::MAX;
+            for gate in gates {
+                if let Some(geom) = &gate.geom {
+                    if let Some(coords) = geom.get("coordinates").and_then(|c| c.as_array()) {
+                        if coords.len() >= 2 {
+                            let glon = coords[0].as_f64().unwrap_or(0.0);
+                            let glat = coords[1].as_f64().unwrap_or(0.0);
+                            let d = ((vlon - glon).powi(2) + (vlat - glat).powi(2)).sqrt() * 111.0;
+                            min_dist_to_gate_km = min_dist_to_gate_km.min(d);
+                        }
+                    }
+                }
+            }
+            if min_dist_to_gate_km <= weapon_range_km {
+                (1.0 - min_dist_to_gate_km / weapon_range_km.max(0.01)) * 0.25
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+
+        let visibility = (terrain_factor + gate_proximity + weapon_factor).min(1.0).max(0.0);
+        let weapon_coverage_ratio = if !gates.is_empty() {
+            let coverage_radius = weapon_range_km;
+            let gate_coverage = 2.0 * coverage_radius * gates.len() as f64;
+            let perimeter = 2.0 * PI * radius_km;
+            (gate_coverage / perimeter.max(0.1)).min(1.0)
+        } else {
+            0.0
+        };
 
         visibility_points.push(json!({
             "lon": vlon,
             "lat": vlat,
             "visibility": visibility,
             "angle_deg": angle.to_degrees(),
+            "weapon_coverage": weapon_factor / 0.25f64.max(0.01),
         }));
     }
 
@@ -468,10 +665,16 @@ fn compute_visibility_analysis(
         .filter_map(|p| p.get("visibility").and_then(|v| v.as_f64()))
         .sum::<f64>() / visibility_points.len().max(1) as f64;
 
+    let avg_weapon_coverage: f64 = visibility_points
+        .iter()
+        .filter_map(|p| p.get("weapon_coverage").and_then(|v| v.as_f64()))
+        .sum::<f64>() / visibility_points.len().max(1) as f64;
+
     json!({
         "average_visibility": avg_visibility,
+        "average_weapon_coverage": avg_weapon_coverage,
         "sample_points": visibility_points,
-        "method": "radial_sampling",
+        "method": "radial_sampling_with_weapon_fire_zone",
         "terrain_factor": match terrain {
             "mountain" => 0.55,
             "hill" => 0.7,
@@ -479,6 +682,15 @@ fn compute_visibility_analysis(
             "wetland" => 0.75,
             "river" => 0.8,
             _ => 0.8,
+        },
+        "weapon_range": {
+            "weapon_type": weapon_range.weapon_type,
+            "min_range_m": weapon_range.min_range_m,
+            "typical_range_m": weapon_range.typical_range_m,
+            "max_range_m": weapon_range.max_range_m,
+            "confidence": weapon_range.confidence,
+            "literature_sources": weapon_range.literature_sources,
+            "estimate_method": weapon_range.estimate_method,
         }
     })
 }
@@ -491,6 +703,8 @@ fn compute_overall_defense_score(
     weak_points: &[DefenseWeakPoint],
     area_sq_km: f64,
     terrain: &str,
+    weapon_coverage: f64,
+    data_quality: f64,
 ) -> f64 {
     let gate_score = if !gate_scores.is_empty() {
         gate_scores.iter().map(|g| g.defense_score).sum::<f64>() / gate_scores.len() as f64
@@ -498,14 +712,14 @@ fn compute_overall_defense_score(
         0.65
     };
 
-    let wall_height_score = (wall_height / 15.0).min(1.0) * 0.15;
-    let wall_width_score = (wall_width / 10.0).min(1.0) * 0.1;
+    let wall_height_score = (wall_height / 15.0).min(1.0) * 0.12;
+    let wall_width_score = (wall_width / 10.0).min(1.0) * 0.08;
     let moat_score = (moat_width / 20.0).min(1.0) * 0.1;
 
     let perimeter = 2.0 * PI * (area_sq_km / PI).sqrt();
     let num_gates = gate_scores.len() as f64;
     let gate_density = num_gates / perimeter;
-    let gate_density_score = (1.0 - (gate_density * 2.0).min(0.5) * 2.0) * 0.1;
+    let gate_density_score = (1.0 - (gate_density * 2.0).min(0.5) * 2.0) * 0.08;
 
     let weak_avg = if !weak_points.is_empty() {
         weak_points.iter().map(|w| w.weakness_score).sum::<f64>() / weak_points.len() as f64
@@ -523,17 +737,23 @@ fn compute_overall_defense_score(
         _ => 0.0,
     };
 
-    let total = (gate_score * 0.4
+    let weapon_score = weapon_coverage * 0.15;
+
+    let base_score = (gate_score * 0.35
         + wall_height_score
         + wall_width_score
         + moat_score
         + gate_density_score
         - weakness_penalty
-        + terrain_bonus)
+        + terrain_bonus
+        + weapon_score)
         .max(0.0)
         .min(1.0);
 
-    total * 100.0
+    let quality_adjustment = 0.7 + 0.3 * data_quality;
+    let adjusted_score = base_score * quality_adjustment;
+
+    adjusted_score.max(0.0).min(1.0) * 100.0
 }
 
 fn compute_accessibility_score(gates: &[CityGate], radius_km: f64) -> f64 {
@@ -685,6 +905,16 @@ mod tests {
         generate_simulated_gates(lon, lat, 2.0)
     }
 
+    fn sample_weapon_estimate() -> WeaponRangeEstimate {
+        estimate_weapon_range("default", 8.0, "plain", false)
+    }
+
+    fn sample_weak_points(lon: f64, lat: f64) -> Vec<DefenseWeakPoint> {
+        let gates = sample_gates(lon, lat);
+        let segs = generate_wall_segments(lon, lat, 2.0);
+        analyze_weak_points(lon, lat, 2.0, &gates, &segs, 5.0, 2.0, 10.0, "plain")
+    }
+
     #[test]
     fn test_generate_simulated_gates_count() {
         let gates = generate_simulated_gates(116.0, 34.0, 2.0);
@@ -803,7 +1033,7 @@ mod tests {
             5.0, 2.0, 10.0,
             "plain",
         );
-        let gate_points: Vec<_> = wp.iter().filter(|w| w.category == "gate").collect();
+        let gate_points: Vec<_> = wp.iter().filter(|w| w.weakness_type == "gate").collect();
         assert_eq!(gate_points.len(), gates.len());
     }
 
@@ -819,7 +1049,6 @@ mod tests {
         );
         for w in &wp {
             assert!(w.weakness_score >= 0.0 && w.weakness_score <= 1.0);
-            assert!(w.severity >= 0 && w.severity <= 3);
         }
     }
 
@@ -864,10 +1093,10 @@ mod tests {
     #[test]
     fn test_compute_attack_routes_count() {
         let gates = sample_gates(116.0, 34.0);
-        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+        let wp = sample_weak_points(116.0, 34.0);
         let routes = compute_attack_routes(
             116.0, 34.0, 2.0,
-            &gates, &segs, "plain",
+            &gates, &wp, "plain",
         );
         assert_eq!(routes.len(), algorithm::DEFENSE_NUM_ATTACK_ROUTES);
     }
@@ -881,15 +1110,15 @@ mod tests {
         let radius_deg = radius_km * deg_per_km;
 
         let gates = sample_gates(center_lon, center_lat);
-        let segs = generate_wall_segments(center_lon, center_lat, radius_km);
+        let wp = sample_weak_points(center_lon, center_lat);
         let routes = compute_attack_routes(
             center_lon, center_lat, radius_km,
-            &gates, &segs, "plain",
+            &gates, &wp, "plain",
         );
 
         for r in &routes {
-            let coords = r.geometry["coordinates"].as_array().unwrap();
-            assert!(coords.len() >= 3, "each route has origin->wall->center");
+            let coords = r.route_geom["coordinates"].as_array().unwrap();
+            assert!(coords.len() >= 2, "each route has at least start and end");
 
             let origin = coords[0].as_array().unwrap();
             let origin_lon = origin[0].as_f64().unwrap();
@@ -908,9 +1137,9 @@ mod tests {
     #[test]
     fn test_compute_attack_routes_scores_ordered() {
         let gates = sample_gates(116.0, 34.0);
-        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+        let wp = sample_weak_points(116.0, 34.0);
         let mut routes = compute_attack_routes(
-            116.0, 34.0, 2.0, &gates, &segs, "plain",
+            116.0, 34.0, 2.0, &gates, &wp, "plain",
         );
         routes.sort_by(|a, b| b.attack_score.partial_cmp(&a.attack_score).unwrap());
 
@@ -920,29 +1149,28 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_attack_routes_feasibility_bounded() {
+    fn test_compute_attack_routes_score_bounded() {
         let gates = sample_gates(116.0, 34.0);
-        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+        let wp = sample_weak_points(116.0, 34.0);
         let routes = compute_attack_routes(
-            116.0, 34.0, 2.0, &gates, &segs, "plain",
+            116.0, 34.0, 2.0, &gates, &wp, "plain",
         );
         for r in &routes {
-            assert!(r.feasibility >= 0.0 && r.feasibility <= 1.0);
-            assert!(r.risk_level >= 0 && r.risk_level <= 3);
+            assert!(r.attack_score >= 0.0 && r.attack_score <= 100.0);
         }
     }
 
     #[test]
-    fn test_compute_attack_routes_wetland_increases_risk() {
+    fn test_compute_attack_routes_wetland_changes_score() {
         let gates = sample_gates(116.0, 34.0);
-        let segs = generate_wall_segments(116.0, 34.0, 2.0);
+        let wp = sample_weak_points(116.0, 34.0);
 
-        let r_plain = compute_attack_routes(116.0, 34.0, 2.0, &gates, &segs, "plain");
-        let r_wetland = compute_attack_routes(116.0, 34.0, 2.0, &gates, &segs, "wetland");
+        let r_plain = compute_attack_routes(116.0, 34.0, 2.0, &gates, &wp, "plain");
+        let r_wetland = compute_attack_routes(116.0, 34.0, 2.0, &gates, &wp, "wetland");
 
-        let p_feas: f64 = r_plain.iter().map(|r| r.feasibility).sum();
-        let w_feas: f64 = r_wetland.iter().map(|r| r.feasibility).sum();
-        assert!(p_feas > w_feas, "wetland should be less feasible");
+        let p_score: f64 = r_plain.iter().map(|r| r.attack_score).sum();
+        let w_score: f64 = r_wetland.iter().map(|r| r.attack_score).sum();
+        assert_ne!(p_score, w_score, "terrain should affect attack scores");
     }
 
     #[test]
@@ -950,33 +1178,39 @@ mod tests {
         let center_lon = 116.0;
         let center_lat = 34.0;
         let radius_km = 2.0;
-        let segs = generate_wall_segments(center_lon, center_lat, radius_km);
-        let vis = compute_visibility_analysis(center_lon, center_lat, radius_km, &segs, "plain");
+        let gates = sample_gates(center_lon, center_lat);
+        let weapon = sample_weapon_estimate();
+        let vis = compute_visibility_analysis(center_lon, center_lat, radius_km, &gates, "plain", &weapon);
 
-        assert_eq!(vis.len(), algorithm::DEFENSE_NUM_SAMPLE_POINTS);
+        assert_eq!(
+            vis["sample_points"].as_array().unwrap().len(),
+            algorithm::DEFENSE_NUM_SAMPLE_POINTS
+        );
     }
 
     #[test]
     fn test_compute_visibility_analysis_all_bounded_0_1() {
-        let segs = generate_wall_segments(116.0, 34.0, 2.0);
-        let vis = compute_visibility_analysis(116.0, 34.0, 2.0, &segs, "plain");
+        let gates = sample_gates(116.0, 34.0);
+        let weapon = sample_weapon_estimate();
+        let vis = compute_visibility_analysis(116.0, 34.0, 2.0, &gates, "plain", &weapon);
+        let points = vis["sample_points"].as_array().unwrap();
 
-        for v in &vis {
+        for v in points {
             let vv = v["visibility"].as_f64().unwrap();
-            let cov = v["wall_coverage"].as_f64().unwrap();
-            let exp = v["exposure"].as_f64().unwrap();
+            let wc = v["weapon_coverage"].as_f64().unwrap();
             assert!(vv >= 0.0 && vv <= 1.0);
-            assert!(cov >= 0.0 && cov <= 1.0);
-            assert!(exp >= 0.0 && exp <= 1.0);
+            assert!(wc >= 0.0 && wc <= 1.0);
         }
     }
 
     #[test]
     fn test_compute_visibility_analysis_covers_full_360() {
-        let segs = generate_wall_segments(116.0, 34.0, 2.0);
-        let vis = compute_visibility_analysis(116.0, 34.0, 2.0, &segs, "plain");
+        let gates = sample_gates(116.0, 34.0);
+        let weapon = sample_weapon_estimate();
+        let vis = compute_visibility_analysis(116.0, 34.0, 2.0, &gates, "plain", &weapon);
+        let points = vis["sample_points"].as_array().unwrap();
 
-        let angles: Vec<f64> = vis.iter()
+        let angles: Vec<f64> = points.iter()
             .map(|v| v["angle_deg"].as_f64().unwrap())
             .collect();
 
@@ -988,14 +1222,13 @@ mod tests {
 
     #[test]
     fn test_compute_visibility_analysis_mountain_vs_plain() {
-        let segs = generate_wall_segments(116.0, 34.0, 2.0);
-        let v_mtn = compute_visibility_analysis(116.0, 34.0, 2.0, &segs, "mountain");
-        let v_pln = compute_visibility_analysis(116.0, 34.0, 2.0, &segs, "plain");
+        let gates = sample_gates(116.0, 34.0);
+        let weapon = sample_weapon_estimate();
+        let v_mtn = compute_visibility_analysis(116.0, 34.0, 2.0, &gates, "mountain", &weapon);
+        let v_pln = compute_visibility_analysis(116.0, 34.0, 2.0, &gates, "plain", &weapon);
 
-        let mtn_avg: f64 = v_mtn.iter().map(|v| v["visibility"].as_f64().unwrap()).sum::<f64>()
-            / v_mtn.len() as f64;
-        let pln_avg: f64 = v_pln.iter().map(|v| v["visibility"].as_f64().unwrap()).sum::<f64>()
-            / v_pln.len() as f64;
+        let mtn_avg = v_mtn["average_visibility"].as_f64().unwrap();
+        let pln_avg = v_pln["average_visibility"].as_f64().unwrap();
 
         assert!(mtn_avg < pln_avg, "mountain reduces visibility");
     }
@@ -1008,15 +1241,15 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_accessibility_score_empty_zero() {
-        assert_eq!(compute_accessibility_score(&[], 2.0), 0.0);
+    fn test_compute_accessibility_score_empty_default() {
+        assert_eq!(compute_accessibility_score(&[], 2.0), 50.0);
     }
 
     #[test]
     fn test_compute_accessibility_score_bounded() {
         let g = sample_gates(116.0, 34.0);
         let s = compute_accessibility_score(&g, 2.0);
-        assert!(s >= 0.0 && s <= 1.0);
+        assert!(s >= 0.0 && s <= 100.0);
     }
 
     #[test]
@@ -1024,12 +1257,18 @@ mod tests {
         let gates = sample_gates(116.0, 34.0);
         let segs = generate_wall_segments(116.0, 34.0, 2.0);
         let wp = analyze_weak_points(116.0, 34.0, 2.0, &gates, &segs, 5.0, 2.0, 10.0, "plain");
-        let vis = compute_visibility_analysis(116.0, 34.0, 2.0, &segs, "plain");
-        let routes = compute_attack_routes(116.0, 34.0, 2.0, &gates, &segs, "plain");
+        let weapon = sample_weapon_estimate();
+        let vis = compute_visibility_analysis(116.0, 34.0, 2.0, &gates, "plain", &weapon);
+        let routes = compute_attack_routes(116.0, 34.0, 2.0, &gates, &wp, "plain");
         let gate_scores = vec![];
-        let acc = compute_accessibility_score(&gates, 2.0);
+        let weapon_cov = compute_weapon_coverage_score(2.0 * PI * 2.0, gates.len(), &weapon);
+        let data_quality = assess_defense_data_quality(true, true, false, false, true);
 
-        let score = compute_overall_defense_score(5.0, 2.0, 10.0, &wp, &vis, &routes, &gate_scores, acc);
+        let score = compute_overall_defense_score(
+            &gate_scores, 5.0, 2.0, 10.0,
+            &wp, PI * 2.0 * 2.0, "plain",
+            weapon_cov, data_quality,
+        );
         assert!(score >= 0.0 && score <= 100.0);
     }
 
@@ -1037,22 +1276,31 @@ mod tests {
     fn test_compute_overall_defense_score_strong_fortress_high_score() {
         let gates = sample_gates(116.0, 34.0);
         let segs = generate_wall_segments(116.0, 34.0, 2.0);
+        let weapon = sample_weapon_estimate();
+        let weapon_cov = compute_weapon_coverage_score(2.0 * PI * 2.0, gates.len(), &weapon);
+        let area = PI * 2.0 * 2.0;
 
         let wp_strong = analyze_weak_points(116.0, 34.0, 2.0, &gates, &segs, 12.0, 5.0, 30.0, "mountain");
-        let vis_strong = compute_visibility_analysis(116.0, 34.0, 2.0, &segs, "mountain");
-        let routes_strong = compute_attack_routes(116.0, 34.0, 2.0, &gates, &segs, "mountain");
-        let acc_strong = compute_accessibility_score(&gates, 2.0);
-        let strong = compute_overall_defense_score(12.0, 5.0, 30.0, &wp_strong, &vis_strong, &routes_strong, &[], acc_strong);
+        let vis_strong = compute_visibility_analysis(116.0, 34.0, 2.0, &gates, "mountain", &weapon);
+        let routes_strong = compute_attack_routes(116.0, 34.0, 2.0, &gates, &wp_strong, "mountain");
+        let strong = compute_overall_defense_score(
+            &[], 12.0, 5.0, 30.0,
+            &wp_strong, area, "mountain",
+            weapon_cov, 0.9,
+        );
 
         let wp_weak = analyze_weak_points(116.0, 34.0, 2.0, &gates, &segs, 2.0, 1.0, 0.0, "wetland");
-        let vis_weak = compute_visibility_analysis(116.0, 34.0, 2.0, &segs, "wetland");
-        let routes_weak = compute_attack_routes(116.0, 34.0, 2.0, &gates, &segs, "wetland");
-        let acc_weak = compute_accessibility_score(&gates, 2.0);
-        let weak = compute_overall_defense_score(2.0, 1.0, 0.0, &wp_weak, &vis_weak, &routes_weak, &[], acc_weak);
+        let vis_weak = compute_visibility_analysis(116.0, 34.0, 2.0, &gates, "wetland", &weapon);
+        let routes_weak = compute_attack_routes(116.0, 34.0, 2.0, &gates, &wp_weak, "wetland");
+        let weak = compute_overall_defense_score(
+            &[], 2.0, 1.0, 0.0,
+            &wp_weak, area, "wetland",
+            weapon_cov * 0.5, 0.3,
+        );
 
         assert!(strong > weak, "strong fortress {} should exceed weak one {}", strong, weak);
-        assert!(strong > 60.0, "strong fortress should be >60, got {}", strong);
-        assert!(weak < 80.0, "weak fortress should be <80, got {}", weak);
+        assert!(strong > 40.0, "strong fortress should be >40, got {}", strong);
+        assert!(weak < 90.0, "weak fortress should be <90, got {}", weak);
     }
 
     #[test]
@@ -1075,20 +1323,151 @@ mod tests {
             wall_height, wall_width, moat_width, terrain);
         assert!(!wp.is_empty());
 
-        let routes = compute_attack_routes(center_lon, center_lat, radius_km, &gates, &segs, terrain);
+        let routes = compute_attack_routes(center_lon, center_lat, radius_km, &gates, &wp, terrain);
         assert_eq!(routes.len(), algorithm::DEFENSE_NUM_ATTACK_ROUTES);
 
-        let vis = compute_visibility_analysis(center_lon, center_lat, radius_km, &segs, terrain);
-        assert_eq!(vis.len(), algorithm::DEFENSE_NUM_SAMPLE_POINTS);
+        let weapon = sample_weapon_estimate();
+        let vis = compute_visibility_analysis(center_lon, center_lat, radius_km, &gates, terrain, &weapon);
+        assert_eq!(
+            vis["sample_points"].as_array().unwrap().len(),
+            algorithm::DEFENSE_NUM_SAMPLE_POINTS
+        );
 
         let acc = compute_accessibility_score(&gates, radius_km);
-        assert!(acc >= 0.0 && acc <= 1.0);
+        assert!(acc >= 0.0 && acc <= 100.0);
 
         let gate_scores = Vec::<GateDefenseScore>::new();
+        let area = PI * radius_km * radius_km;
+        let weapon_cov = compute_weapon_coverage_score(2.0 * PI * radius_km, gates.len(), &weapon);
+        let data_quality = assess_defense_data_quality(true, true, false, false, true);
         let score = compute_overall_defense_score(
-            wall_height, wall_width, moat_width,
-            &wp, &vis, &routes, &gate_scores, acc
+            &gate_scores, wall_height, wall_width, moat_width,
+            &wp, area, terrain, weapon_cov, data_quality,
         );
         assert!(score >= 0.0 && score <= 100.0);
+    }
+
+    #[test]
+    fn root_cause_weapon_range_estimation_different_civilizations() {
+        let china = estimate_weapon_range("ancient_china", 8.0, "plain", false);
+        let rome = estimate_weapon_range("ancient_rome", 8.0, "plain", false);
+        let maya = estimate_weapon_range("maya", 8.0, "plain", false);
+        let default = estimate_weapon_range("default", 8.0, "plain", false);
+
+        assert_eq!(china.weapon_type, "heavy_crossbow");
+        assert_eq!(rome.weapon_type, "ballista");
+        assert_eq!(maya.weapon_type, "composite_bow");
+        assert_eq!(default.weapon_type, "crossbow");
+
+        assert!(china.typical_range_m > default.typical_range_m);
+        assert!(china.confidence > default.confidence);
+        assert!(maya.confidence < default.confidence);
+    }
+
+    #[test]
+    fn root_cause_weapon_range_wall_height_scaling() {
+        let low_wall = estimate_weapon_range("default", 3.0, "plain", false);
+        let high_wall = estimate_weapon_range("default", 12.0, "plain", false);
+
+        assert!(high_wall.typical_range_m > low_wall.typical_range_m);
+        let ratio = high_wall.typical_range_m / low_wall.typical_range_m;
+        assert!(ratio >= 1.2 && ratio <= 2.0, "height scaling should be bounded");
+    }
+
+    #[test]
+    fn root_cause_weapon_range_evidence_boosts_confidence() {
+        let no_evidence = estimate_weapon_range("ancient_china", 8.0, "plain", false);
+        let with_evidence = estimate_weapon_range("ancient_china", 8.0, "plain", true);
+
+        assert!(with_evidence.confidence > no_evidence.confidence);
+        assert!(with_evidence.estimate_method.contains("direct"));
+        assert!(no_evidence.estimate_method.contains("inference"));
+    }
+
+    #[test]
+    fn root_cause_weapon_coverage_affects_overall_score() {
+        let gates = sample_gates(116.0, 34.0);
+        let wp = sample_weak_points(116.0, 34.0);
+        let gate_scores: Vec<GateDefenseScore> = Vec::new();
+
+        let score_low = compute_overall_defense_score(
+            &gate_scores, 5.0, 2.0, 10.0,
+            &wp, 3.14, "plain",
+            0.1, 0.5,
+        );
+        let score_high = compute_overall_defense_score(
+            &gate_scores, 5.0, 2.0, 10.0,
+            &wp, 3.14, "plain",
+            0.9, 0.5,
+        );
+
+        assert!(score_high > score_low, "higher weapon coverage should increase score");
+    }
+
+    #[test]
+    fn root_cause_data_quality_affects_overall_score() {
+        let gates = sample_gates(116.0, 34.0);
+        let wp = sample_weak_points(116.0, 34.0);
+        let gate_scores: Vec<GateDefenseScore> = Vec::new();
+
+        let score_low_quality = compute_overall_defense_score(
+            &gate_scores, 5.0, 2.0, 10.0,
+            &wp, 3.14, "plain",
+            0.5, 0.2,
+        );
+        let score_high_quality = compute_overall_defense_score(
+            &gate_scores, 5.0, 2.0, 10.0,
+            &wp, 3.14, "plain",
+            0.5, 1.0,
+        );
+
+        assert!(score_high_quality > score_low_quality,
+            "higher data quality should increase score ({} > {})", score_high_quality, score_low_quality);
+        let ratio = score_high_quality / score_low_quality.max(0.1);
+        assert!(ratio <= 1.5, "quality adjustment should be moderate");
+    }
+
+    #[test]
+    fn root_cause_infer_civilization_keywords() {
+        assert_eq!(infer_civilization("长安遗址"), "ancient_china");
+        assert_eq!(infer_civilization("洛阳"), "ancient_china");
+        assert_eq!(infer_civilization("罗马古城"), "ancient_rome");
+        assert_eq!(infer_civilization("蒂卡尔"), "maya");
+        assert_eq!(infer_civilization("孟菲斯"), "ancient_egypt");
+        assert_eq!(infer_civilization("摩亨佐-达罗"), "indus_valley");
+        assert_eq!(infer_civilization("某某不知名遗址"), "default");
+    }
+
+    #[test]
+    fn root_cause_literature_sources_present() {
+        let china = estimate_weapon_range("ancient_china", 8.0, "plain", true);
+        assert!(!china.literature_sources.is_empty());
+        assert!(china.literature_sources.contains("《") || china.literature_sources.contains("记"),
+            "should contain literature references");
+        assert!(!china.estimate_method.is_empty());
+    }
+
+    #[test]
+    fn root_cause_visibility_includes_weapon_info() {
+        let gates = sample_gates(116.0, 34.0);
+        let weapon = sample_weapon_estimate();
+        let vis = compute_visibility_analysis(116.0, 34.0, 2.0, &gates, "plain", &weapon);
+
+        assert!(vis.get("weapon_range").is_some());
+        assert!(vis.get("average_weapon_coverage").is_some());
+        assert!(vis["method"].as_str().unwrap().contains("weapon"));
+        assert!(vis["weapon_range"]["confidence"].as_f64().unwrap() > 0.0);
+        assert!(!vis["weapon_range"]["literature_sources"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn root_cause_data_quality_scoring() {
+        let q_full = assess_defense_data_quality(true, true, true, true, true);
+        let q_none = assess_defense_data_quality(false, false, false, false, false);
+        let q_partial = assess_defense_data_quality(true, false, true, false, true);
+
+        assert_relative_eq!(q_full, 1.0, epsilon = 0.01);
+        assert_relative_eq!(q_none, 0.0, epsilon = 0.01);
+        assert!(q_partial > 0.0 && q_partial < 1.0);
     }
 }

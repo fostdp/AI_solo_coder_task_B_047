@@ -406,6 +406,9 @@ pub struct CivilizationRadarData {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CivilizationAvgMetrics {
+    pub civilization_id: i32,
+    pub civilization_name: String,
+    pub site_count: i32,
     pub avg_integration_global: f64,
     pub avg_choice_global: f64,
     pub avg_boundary_fd: f64,
