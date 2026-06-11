@@ -249,6 +249,9 @@ pub struct CityGate {
     pub geom: Option<Value>,
     pub description: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
+    pub longitude: f64,
+    pub latitude: f64,
+    pub width_m: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -417,5 +420,45 @@ pub struct CivilizationAvgMetrics {
     pub avg_road_density: f64,
     pub avg_functional_diversity: f64,
     pub avg_area_sq_km: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Zone {
+    pub id: i32,
+    pub city_site_id: i32,
+    pub zone_type: String,
+    pub name: Option<String>,
+    pub area_sq_km: f64,
+    pub center_longitude: f64,
+    pub center_latitude: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Building {
+    pub id: i32,
+    pub city_site_id: i32,
+    pub zone_id: Option<i32>,
+    pub building_type: Option<String>,
+    pub area_sq_m: Option<f64>,
+    pub num_rooms: i32,
+    pub longitude: f64,
+    pub latitude: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PopulationGrid {
+    pub lon: f64,
+    pub lat: f64,
+    pub density_km2: f64,
+    pub population: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PopulationResult {
+    pub total_population: i32,
+    pub method: String,
+    pub confidence: f64,
+    pub grid: Vec<PopulationGrid>,
+    pub data_quality: String,
 }
 

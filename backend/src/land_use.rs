@@ -1,6 +1,7 @@
 use crate::models::{LandUseTimeline, LandUsePeriod, LandUseItem, LandUseChange};
 use crate::errors::AppError;
 use crate::config::algorithm;
+use crate::services::land_use_tracer::{LandUseTracer, StratigraphicLayer as TracerStratigraphicLayer, DepositionModel as TracerDepositionModel, ArchaeologicalCheckpoint as TracerArchaeologicalCheckpoint};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
@@ -13,6 +14,39 @@ const LAND_USE_TYPES: &[(&str, &str)] = &[
     ("water", "水体"),
     ("wasteland", "荒地"),
     ("settlement", "居民点"),
+];
+
+const LAND_USE_COLORS: &[&str] = &[
+    "#FF6B6B",
+    "#95E1D3",
+    "#1B4332",
+    "#90BE6D",
+    "#00B4D8",
+    "#0077B6",
+    "#D4A373",
+    "#E0AAFF",
+];
+
+const LAND_USE_LABELS: &[&str] = &[
+    "城市建成区",
+    "农田",
+    "森林",
+    "草地",
+    "湿地",
+    "水体",
+    "荒地",
+    "居民点",
+];
+
+const PERIOD_NAMES: &[&str] = &[
+    "城市鼎盛期",
+    "城市衰落初期",
+    "城市废弃期",
+    "早期农业期",
+    "中期农业期",
+    "近古时期",
+    "近代时期",
+    "现代时期",
 ];
 
 #[derive(Debug, Clone)]
@@ -87,182 +121,120 @@ pub const DEPOSITION_MODELS: &[(&str, DepositionModel)] = &[
     }),
 ];
 
+fn convert_to_tracer_layer(layer: &StratigraphicLayer) -> TracerStratigraphicLayer {
+    TracerStratigraphicLayer {
+        layer_id: layer.layer_id.clone(),
+        period_name: layer.period_name.clone(),
+        period_year: layer.period_year,
+        thickness_cm: layer.thickness_cm,
+        sediment_type: layer.sediment_type.clone(),
+        artifacts: layer.artifacts.clone(),
+        dating_method: layer.dating_method.clone(),
+        confidence: layer.confidence,
+    }
+}
+
+fn convert_from_tracer_layer(layer: &TracerStratigraphicLayer) -> StratigraphicLayer {
+    StratigraphicLayer {
+        layer_id: layer.layer_id.clone(),
+        period_name: layer.period_name.clone(),
+        period_year: layer.period_year,
+        thickness_cm: layer.thickness_cm,
+        sediment_type: layer.sediment_type.clone(),
+        artifacts: layer.artifacts.clone(),
+        dating_method: layer.dating_method.clone(),
+        confidence: layer.confidence,
+    }
+}
+
+fn convert_to_tracer_model(model: &DepositionModel) -> TracerDepositionModel {
+    use crate::services::land_use_tracer::DepositionEnvironment as TracerEnv;
+    let env = match model.environment {
+        DepositionEnvironment::Alluvial => TracerEnv::Alluvial,
+        DepositionEnvironment::Lacustrine => TracerEnv::Lacustrine,
+        DepositionEnvironment::Aeolian => TracerEnv::Aeolian,
+        DepositionEnvironment::Fluvial => TracerEnv::Fluvial,
+        DepositionEnvironment::Marine => TracerEnv::Marine,
+        DepositionEnvironment::Colluvial => TracerEnv::Colluvial,
+    };
+    TracerDepositionModel {
+        environment: env,
+        accumulation_rate_cm_per_yr: model.accumulation_rate_cm_per_yr,
+        compaction_factor: model.compaction_factor,
+        erosion_rate_cm_per_yr: model.erosion_rate_cm_per_yr,
+        confidence: model.confidence,
+    }
+}
+
+fn convert_from_tracer_model(model: &TracerDepositionModel) -> DepositionModel {
+    let env = match model.environment {
+        crate::services::land_use_tracer::DepositionEnvironment::Alluvial => DepositionEnvironment::Alluvial,
+        crate::services::land_use_tracer::DepositionEnvironment::Lacustrine => DepositionEnvironment::Lacustrine,
+        crate::services::land_use_tracer::DepositionEnvironment::Aeolian => DepositionEnvironment::Aeolian,
+        crate::services::land_use_tracer::DepositionEnvironment::Fluvial => DepositionEnvironment::Fluvial,
+        crate::services::land_use_tracer::DepositionEnvironment::Marine => DepositionEnvironment::Marine,
+        crate::services::land_use_tracer::DepositionEnvironment::Colluvial => DepositionEnvironment::Colluvial,
+    };
+    DepositionModel {
+        environment: env,
+        accumulation_rate_cm_per_yr: model.accumulation_rate_cm_per_yr,
+        compaction_factor: model.compaction_factor,
+        erosion_rate_cm_per_yr: model.erosion_rate_cm_per_yr,
+        confidence: model.confidence,
+    }
+}
+
+fn convert_to_tracer_checkpoint(checkpoint: &ArchaeologicalCheckpoint) -> TracerArchaeologicalCheckpoint {
+    TracerArchaeologicalCheckpoint {
+        period_name: checkpoint.period_name.clone(),
+        period_year: checkpoint.period_year,
+        evidence_type: checkpoint.evidence_type.clone(),
+        description: checkpoint.description.clone(),
+        confidence: checkpoint.confidence,
+        land_use_constraints: checkpoint.land_use_constraints.clone(),
+    }
+}
+
+pub fn select_deposition_model(terrain: &str, water_proximity: f64) -> &'static DepositionModel {
+    let tracer = LandUseTracer::default();
+    let tracer_model = LandUseTracer::select_deposition_model(&tracer, terrain, water_proximity);
+    let tracer_env = tracer_model.environment;
+    match tracer_env {
+        crate::services::land_use_tracer::DepositionEnvironment::Fluvial => &DEPOSITION_MODELS[1].1,
+        crate::services::land_use_tracer::DepositionEnvironment::Lacustrine => &DEPOSITION_MODELS[2].1,
+        crate::services::land_use_tracer::DepositionEnvironment::Aeolian => &DEPOSITION_MODELS[3].1,
+        _ => &DEPOSITION_MODELS[0].1,
+    }
+}
+
 pub fn estimate_missing_periods(
     known_layers: &[StratigraphicLayer],
     target_periods: &[(i32, String)],
     model: &DepositionModel,
 ) -> Vec<StratigraphicLayer> {
-    let mut result = Vec::new();
-    let known_years: Vec<i32> = known_layers.iter().map(|l| l.period_year).collect();
-
-    for (year, name) in target_periods {
-        if known_years.contains(year) {
-            if let Some(layer) = known_layers.iter().find(|l| l.period_year == *year) {
-                result.push(layer.clone());
-            }
-        } else {
-            let estimated = estimate_single_layer(*year, name, known_layers, model);
-            result.push(estimated);
-        }
-    }
-
-    result.sort_by(|a, b| a.period_year.cmp(&b.period_year));
-    result
+    let tracer_layers: Vec<TracerStratigraphicLayer> = known_layers.iter().map(convert_to_tracer_layer).collect();
+    let tracer_model = convert_to_tracer_model(model);
+    let result = LandUseTracer::new(&crate::services::land_use_tracer::DEPOSITION_MODELS[0].1, true, true)
+        .estimate_missing_periods(&tracer_layers, target_periods, &tracer_model);
+    result.iter().map(convert_from_tracer_layer).collect()
 }
 
-fn estimate_single_layer(
-    year: i32,
-    name: &str,
-    known_layers: &[StratigraphicLayer],
-    model: &DepositionModel,
-) -> StratigraphicLayer {
-    if known_layers.is_empty() {
-        return StratigraphicLayer {
-            layer_id: format!("est_{}", year),
-            period_name: name.to_string(),
-            period_year: year,
-            thickness_cm: model.accumulation_rate_cm_per_yr * 1000.0,
-            sediment_type: "estimated".to_string(),
-            artifacts: vec![],
-            dating_method: "deposition_model".to_string(),
-            confidence: 0.3,
-        };
-    }
-
-    let before = known_layers.iter()
-        .filter(|l| l.period_year < year)
-        .max_by_key(|l| l.period_year);
-    let after = known_layers.iter()
-        .filter(|l| l.period_year > year)
-        .min_by_key(|l| l.period_year);
-
-    match (before, after) {
-        (Some(b), Some(a)) => {
-            let total_span = (a.period_year - b.period_year).abs() as f64;
-            let year_span = (year - b.period_year).abs() as f64;
-            let t = if total_span > 0.0 { year_span / total_span } else { 0.5 };
-
-            let thickness = b.thickness_cm + (a.thickness_cm - b.thickness_cm) * t
-                + model.accumulation_rate_cm_per_yr * year_span * (1.0 - t);
-
-            let conf = (b.confidence.min(a.confidence)) * (1.0 - t * 0.3) * (1.0 - (1.0 - t) * 0.3);
-
-            StratigraphicLayer {
-                layer_id: format!("est_{}", year),
-                period_name: name.to_string(),
-                period_year: year,
-                thickness_cm: thickness.max(0.5),
-                sediment_type: infer_sediment_type(t, &b.sediment_type, &a.sediment_type),
-                artifacts: vec![],
-                dating_method: "stratigraphic_interpolation".to_string(),
-                confidence: conf.max(0.2),
-            }
-        }
-        (Some(b), None) => {
-            let year_diff = (year - b.period_year).abs() as f64;
-            let thickness = b.thickness_cm + model.accumulation_rate_cm_per_yr * year_diff
-                - model.erosion_rate_cm_per_yr * year_diff * 0.5;
-
-            let conf = b.confidence * (1.0 - year_diff.min(2000.0) / 2000.0 * 0.5);
-
-            StratigraphicLayer {
-                layer_id: format!("est_{}", year),
-                period_name: name.to_string(),
-                period_year: year,
-                thickness_cm: thickness.max(0.5),
-                sediment_type: b.sediment_type.clone(),
-                artifacts: vec![],
-                dating_method: "extrapolation_after".to_string(),
-                confidence: conf.max(0.15),
-            }
-        }
-        (None, Some(a)) => {
-            let year_diff = (year - a.period_year).abs() as f64;
-            let thickness = a.thickness_cm - model.accumulation_rate_cm_per_yr * year_diff
-                + model.erosion_rate_cm_per_yr * year_diff * 0.5;
-
-            let conf = a.confidence * (1.0 - year_diff.min(2000.0) / 2000.0 * 0.5);
-
-            StratigraphicLayer {
-                layer_id: format!("est_{}", year),
-                period_name: name.to_string(),
-                period_year: year,
-                thickness_cm: thickness.max(0.5),
-                sediment_type: a.sediment_type.clone(),
-                artifacts: vec![],
-                dating_method: "extrapolation_before".to_string(),
-                confidence: conf.max(0.15),
-            }
-        }
-        (None, None) => {
-            StratigraphicLayer {
-                layer_id: format!("est_{}", year),
-                period_name: name.to_string(),
-                period_year: year,
-                thickness_cm: model.accumulation_rate_cm_per_yr * 500.0,
-                sediment_type: "unknown".to_string(),
-                artifacts: vec![],
-                dating_method: "model_baseline".to_string(),
-                confidence: 0.1,
-            }
-        }
-    }
-}
-
-fn infer_sediment_type(t: f64, before: &str, after: &str) -> String {
-    if t < 0.3 {
-        before.to_string()
-    } else if t > 0.7 {
-        after.to_string()
-    } else {
-        format!("{}-{}_transition", before, after)
-    }
+pub fn assess_stratigraphic_continuity(layers: &[StratigraphicLayer]) -> (f64, Vec<String>, Vec<i32>) {
+    let tracer_layers: Vec<TracerStratigraphicLayer> = layers.iter().map(convert_to_tracer_layer).collect();
+    LandUseTracer::assess_stratigraphic_continuity(&LandUseTracer::default(), &tracer_layers)
 }
 
 pub fn apply_archaeological_constraints(
     layers: &mut [StratigraphicLayer],
     checkpoints: &[ArchaeologicalCheckpoint],
 ) {
-    for checkpoint in checkpoints {
-        if let Some(layer) = layers.iter_mut().find(|l| l.period_year == checkpoint.period_year) {
-            layer.confidence = layer.confidence.max(checkpoint.confidence * 0.8);
-            if layer.artifacts.is_empty() {
-                layer.artifacts.push(checkpoint.evidence_type.clone());
-            }
-            layer.dating_method = format!("{}_archaeo_validated", layer.dating_method);
-        }
+    let mut tracer_layers: Vec<TracerStratigraphicLayer> = layers.iter().map(convert_to_tracer_layer).collect();
+    let tracer_checkpoints: Vec<TracerArchaeologicalCheckpoint> = checkpoints.iter().map(convert_to_tracer_checkpoint).collect();
+    LandUseTracer::new(&crate::services::land_use_tracer::DEPOSITION_MODELS[0].1, true, true)
+        .apply_archaeological_constraints(&mut tracer_layers, &tracer_checkpoints);
+    for (i, layer) in tracer_layers.iter().enumerate() {
+        layers[i] = convert_from_tracer_layer(layer);
     }
-}
-
-pub fn assess_stratigraphic_continuity(layers: &[StratigraphicLayer]) -> (f64, Vec<String>, Vec<i32>) {
-    if layers.len() < 2 {
-        return (if layers.is_empty() { 0.0 } else { 1.0 }, vec![], vec![]);
-    }
-
-    let mut gaps = Vec::new();
-    let mut issues = Vec::new();
-    let mut total_gap_years = 0;
-
-    for i in 1..layers.len() {
-        let gap = layers[i].period_year - layers[i-1].period_year;
-        if gap > 500 {
-            gaps.push(layers[i-1].period_year);
-            issues.push(format!(
-                "时期{}至{}存在{}年地层间断",
-                layers[i-1].period_name, layers[i].period_name, gap
-            ));
-            total_gap_years += gap;
-        }
-    }
-
-    let total_span = (layers.last().unwrap().period_year - layers.first().unwrap().period_year).abs() as f64;
-    let continuity = if total_span > 0.0 {
-        (1.0 - total_gap_years as f64 / total_span).max(0.0)
-    } else {
-        1.0
-    };
-
-    (continuity, issues, gaps)
 }
 
 pub fn fill_land_use_gaps(
@@ -270,54 +242,15 @@ pub fn fill_land_use_gaps(
     model: &DepositionModel,
     checkpoints: &[ArchaeologicalCheckpoint],
 ) -> LandUseTimeline {
-    let mut periods = timeline.periods.clone();
+    let tracer_model = convert_to_tracer_model(model);
+    let tracer_checkpoints: Vec<TracerArchaeologicalCheckpoint> = checkpoints.iter().map(convert_to_tracer_checkpoint).collect();
+    LandUseTracer::new(&crate::services::land_use_tracer::DEPOSITION_MODELS[0].1, true, true)
+        .fill_land_use_gaps(timeline, &tracer_model, &tracer_checkpoints)
+}
 
-    if periods.len() < 2 {
-        return timeline.clone();
-    }
-
-    let mut filled_periods = Vec::new();
-
-    for i in 0..periods.len() {
-        filled_periods.push(periods[i].clone());
-
-        if i < periods.len() - 1 {
-            let curr = &periods[i];
-            let next = &periods[i + 1];
-            let gap = next.period_year - curr.period_year;
-
-            if gap > 300 {
-                let num_intermediate = (gap / 200).min(3).max(1);
-                for j in 1..=num_intermediate {
-                    let t = j as f64 / (num_intermediate + 1) as f64;
-                    let inter_year = curr.period_year + (gap as f64 * t) as i32;
-                    let inter = interpolate_land_use_period(curr, next, t, inter_year, model);
-                    filled_periods.push(inter);
-                }
-            }
-        }
-    }
-
-    for checkpoint in checkpoints {
-        if let Some(p) = filled_periods.iter_mut().find(|p| p.period_year == checkpoint.period_year) {
-            for (land_type, min_pct, max_pct) in &checkpoint.land_use_constraints {
-                if let Some(item) = p.land_uses.iter_mut().find(|u| u.land_use_type == *land_type) {
-                    if item.percentage < *min_pct {
-                        item.percentage = *min_pct;
-                    }
-                    if item.percentage > *max_pct {
-                        item.percentage = *max_pct;
-                    }
-                }
-            }
-        }
-    }
-
-    LandUseTimeline {
-        site_id: timeline.site_id,
-        periods: filled_periods,
-        land_use_types: timeline.land_use_types.clone(),
-    }
+pub fn compute_land_use_trend(timeline: &LandUseTimeline) -> Value {
+    LandUseTracer::new(&crate::services::land_use_tracer::DEPOSITION_MODELS[0].1, true, true)
+        .compute_land_use_trend(timeline)
 }
 
 fn interpolate_land_use_period(
@@ -352,20 +285,6 @@ fn interpolate_land_use_period(
         period_name: format!("{}年前后", year),
         period_year: year,
         land_uses,
-    }
-}
-
-pub fn select_deposition_model(terrain: &str, water_proximity: f64) -> &'static DepositionModel {
-    if terrain.contains("river") || water_proximity > 0.8 {
-        &DEPOSITION_MODELS[1].1
-    } else if terrain.contains("lake") || water_proximity > 0.6 {
-        &DEPOSITION_MODELS[2].1
-    } else if terrain.contains("loess") || terrain.contains("plain") {
-        &DEPOSITION_MODELS[0].1
-    } else if terrain.contains("terrace") || terrain.contains("hill") {
-        &DEPOSITION_MODELS[3].1
-    } else {
-        &DEPOSITION_MODELS[0].1
     }
 }
 
@@ -584,74 +503,6 @@ pub async fn save_land_use_changes(
 
     tx.commit().await?;
     Ok(())
-}
-
-pub fn compute_land_use_trend(timeline: &LandUseTimeline) -> Value {
-    let mut trends = HashMap::new();
-
-    if timeline.periods.len() < 2 {
-        return json!({ "trends": {}, "note": "数据点不足" });
-    }
-
-    for land_type in &timeline.land_use_types {
-        let values: Vec<f64> = timeline.periods
-            .iter()
-            .map(|p| {
-                p.land_uses
-                    .iter()
-                    .find(|u| u.land_use_type == *land_type)
-                    .map(|u| u.percentage)
-                    .unwrap_or(0.0)
-            })
-            .collect();
-
-        let first = values.first().copied().unwrap_or(0.0);
-        let last = values.last().copied().unwrap_or(0.0);
-        let change = last - first;
-        let change_pct = if first > 0.0 { (change / first) * 100.0 } else { 0.0 };
-
-        let trend_type = if change_pct > 20.0 {
-            "significant_increase"
-        } else if change_pct > 5.0 {
-            "moderate_increase"
-        } else if change_pct < -20.0 {
-            "significant_decrease"
-        } else if change_pct < -5.0 {
-            "moderate_decrease"
-        } else {
-            "stable"
-        };
-
-        trends.insert(land_type.clone(), json!({
-            "start_percentage": first,
-            "end_percentage": last,
-            "absolute_change": change,
-            "relative_change_percent": change_pct,
-            "trend_type": trend_type,
-        }));
-    }
-
-    let peak_urban = timeline.periods
-        .iter()
-        .map(|p| {
-            p.land_uses
-                .iter()
-                .find(|u| u.land_use_type == "urban")
-                .map(|u| u.percentage)
-                .unwrap_or(0.0)
-        })
-        .fold(0.0_f64, f64::max);
-
-    json!({
-        "trends": trends,
-        "peak_urban_percentage": peak_urban,
-        "urban_decay_rate": if peak_urban > 0.0 {
-            (peak_urban - timeline.periods.last().and_then(|p|
-                p.land_uses.iter().find(|u| u.land_use_type == "urban").map(|u| u.percentage)
-            ).unwrap_or(0.0)) / peak_urban
-        } else { 0.0 },
-        "num_periods": timeline.periods.len(),
-    })
 }
 
 use actix_web::{web, HttpResponse};

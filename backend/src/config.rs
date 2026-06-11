@@ -13,6 +13,7 @@ pub mod algorithm {
     pub const MK_ALPHA: f64 = 0.05;
 
     pub const POPULATION_GRID_SIZE: f64 = 0.002;
+    pub const POPULATION_GRID_RESOLUTION: Option<usize> = Some(16);
     pub const POPULATION_PERSONS_PER_ROOM: f64 = 4.5;
     pub const POPULATION_ALLOMETRIC_EXPONENT: f64 = 0.85;
     pub const POPULATION_IDW_POWER: f64 = 2.0;

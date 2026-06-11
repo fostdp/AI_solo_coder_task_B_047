@@ -13,3 +13,4 @@ pub mod population;
 pub mod defense;
 pub mod land_use;
 pub mod civilization;
+pub mod services;

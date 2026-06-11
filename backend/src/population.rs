@@ -1,6 +1,8 @@
-use crate::models::{PopulationAnalysisResult, PopulationGridCell, ZonePopulation};
+use crate::models::{PopulationAnalysisResult, PopulationGridCell, ZonePopulation, Zone, Building, PopulationResult};
 use crate::errors::AppError;
 use crate::config::algorithm;
+use crate::services::population_reconstructor::{PopulationReconstructor, ReconstructionConfig, DataCompleteness};
+use crate::services::interpolation_service;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -28,12 +30,85 @@ const LITERATURE_BASELINE_DENSITY: &[(&str, f64, f64, &str)] = &[
     ("other", 400.0, 0.15, "综合考古遗存估算"),
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum DataCompleteness {
-    High,
-    Medium,
-    Low,
-    VeryLow,
+fn convert_zones(zones: &[(String, f64)], center_lon: f64, center_lat: f64) -> Vec<Zone> {
+    let angle_step = std::f64::consts::TAU / zones.len().max(1) as f64;
+    let radius = 0.01;
+    zones.iter().enumerate().map(|(i, (zone_type, area_km2))| {
+        let angle = i as f64 * angle_step;
+        Zone {
+            id: (i + 1) as i32,
+            city_site_id: 0,
+            zone_type: zone_type.clone(),
+            name: None,
+            area_sq_km: *area_km2,
+            center_longitude: center_lon + radius * angle.cos(),
+            center_latitude: center_lat + radius * angle.sin(),
+        }
+    }).collect()
+}
+
+fn convert_buildings(buildings: &[(f64, f64, String)]) -> Vec<Building> {
+    buildings.iter().enumerate().map(|(i, (lon, lat, btype))| {
+        let num_rooms = match btype.as_str() {
+            "palace" => 20,
+            "residential" => 4,
+            "temple" => 2,
+            "official" => 8,
+            "workshop" => 3,
+            "tomb" => 0,
+            "storage" => 0,
+            _ => 3,
+        };
+        Building {
+            id: (i + 1) as i32,
+            city_site_id: 0,
+            zone_id: None,
+            building_type: Some(btype.clone()),
+            area_sq_m: Some(50.0),
+            num_rooms,
+            longitude: *lon,
+            latitude: *lat,
+        }
+    }).collect()
+}
+
+fn convert_population_result(result: PopulationResult, zones: &[(String, f64)]) -> PopulationAnalysisResult {
+    let grid_cells: Vec<PopulationGridCell> = result.grid.iter().map(|g| PopulationGridCell {
+        lon: g.lon,
+        lat: g.lat,
+        population: g.population as f64,
+        density: g.density_km2,
+        zone_type: None,
+    }).collect();
+
+    let total_pop = result.total_population as f64;
+    let zone_populations: Vec<ZonePopulation> = zones.iter().map(|(zone_type, area_km2)| {
+        let (density_min, density_max) = get_zone_density_range(zone_type);
+        let density = (density_min + density_max) / 2.0;
+        let population = area_km2 * density;
+        ZonePopulation {
+            zone_type: zone_type.clone(),
+            population,
+            area_km2: *area_km2,
+            density,
+            percentage: if total_pop > 0.0 { (population / total_pop) * 100.0 } else { 0.0 },
+        }
+    }).collect();
+
+    let densities: Vec<f64> = grid_cells.iter().map(|c| c.density).collect();
+    let avg_density = if densities.is_empty() { 0.0 } else { densities.iter().sum::<f64>() / densities.len() as f64 };
+    let max_density = densities.iter().cloned().fold(0.0_f64, f64::max);
+
+    PopulationAnalysisResult {
+        site_id: 0,
+        total_population: total_pop,
+        population_density_avg: avg_density,
+        population_density_max: max_density,
+        model_type: result.method,
+        confidence: result.confidence,
+        grid_cells,
+        zone_populations,
+    }
 }
 
 pub fn assess_data_completeness(
@@ -41,17 +116,11 @@ pub fn assess_data_completeness(
     buildings: &[(f64, f64, String)],
     has_total_pop: bool,
 ) -> DataCompleteness {
-    let mut score = 0.0;
-    if !zones.is_empty() { score += 0.4; }
-    if zones.len() >= 5 { score += 0.1; }
-    if !buildings.is_empty() { score += 0.3; }
-    if buildings.len() >= 20 { score += 0.1; }
-    if has_total_pop { score += 0.1; }
-
-    if score >= 0.85 { DataCompleteness::High }
-    else if score >= 0.6 { DataCompleteness::Medium }
-    else if score >= 0.3 { DataCompleteness::Low }
-    else { DataCompleteness::VeryLow }
+    let reconstructor = PopulationReconstructor::new(ReconstructionConfig::default());
+    let converted_zones = convert_zones(zones, 0.0, 0.0);
+    let converted_buildings = convert_buildings(buildings);
+    let (level, _score) = reconstructor.assess_data_completeness(&converted_zones, &converted_buildings, has_total_pop);
+    level
 }
 
 pub fn literature_baseline_density(zone_type: &str) -> (f64, f64, &'static str) {
@@ -70,52 +139,9 @@ pub fn multi_source_fusion_density(
     buildings_in_zone: &[(f64, f64, String)],
     persons_per_room: f64,
 ) -> (f64, f64, String) {
-    let (lit_density, lit_weight, lit_source) = literature_baseline_density(zone_type);
-
-    let (zone_min, zone_max) = get_zone_density_range(zone_type);
-    let zone_avg = (zone_min + zone_max) / 2.0;
-    let zone_weight = 0.25;
-
-    let (building_density, building_weight) = if buildings_in_zone.is_empty() || zone_area_km2 <= 0.0 {
-        (0.0, 0.0)
-    } else {
-        let mut total_rooms = 0.0;
-        for (_, _, btype) in buildings_in_zone {
-            let rooms = match btype.as_str() {
-                "palace" => 20.0,
-                "residential" => 4.0,
-                "temple" => 2.0,
-                "official" => 8.0,
-                "workshop" => 3.0,
-                "tomb" => 0.0,
-                "storage" => 0.0,
-                _ => 3.0,
-            };
-            total_rooms += rooms;
-        }
-        let pop_estimate = total_rooms * persons_per_room;
-        let density = pop_estimate / zone_area_km2.max(0.001);
-        let w = (buildings_in_zone.len() as f64 / 30.0).min(1.0) * 0.6;
-        (density, w)
-    };
-
-    let total_weight = lit_weight + zone_weight + building_weight;
-    if total_weight <= 0.0 {
-        return (lit_density, lit_weight, lit_source.to_string());
-    }
-
-    let fused = (lit_density * lit_weight + zone_avg * zone_weight + building_density * building_weight)
-        / total_weight;
-
-    let confidence = (lit_weight * 0.6 + zone_weight * 0.4 + building_weight)
-        / total_weight;
-
-    let method_tag = format!(
-        "fusion(lit={:.1}×{:.2}, zone={:.1}×{:.2}, bld={:.1}×{:.2})",
-        lit_density, lit_weight, zone_avg, zone_weight, building_density, building_weight
-    );
-
-    (fused.max(0.0), confidence.max(0.0).min(1.0), method_tag)
+    let reconstructor = PopulationReconstructor::new(ReconstructionConfig::default());
+    let converted_buildings = convert_buildings(buildings_in_zone);
+    reconstructor.multi_source_fusion_density(zone_type, zone_area_km2, &converted_buildings, persons_per_room)
 }
 
 pub fn kernel_density_interpolation(
@@ -125,51 +151,39 @@ pub fn kernel_density_interpolation(
     control_points: &[(f64, f64, f64)],
     bandwidth_km: f64,
 ) -> Vec<PopulationGridCell> {
-    let grid_size = algorithm::POPULATION_GRID_SIZE;
-    let half_size_km = (site_area_km2.sqrt() / 2.0).max(0.5);
-    let deg_per_km = 1.0 / 111.0;
-    let half_deg = half_size_km * deg_per_km;
-    let cells_per_side = ((half_deg * 2.0) / grid_size).ceil().max(10.0).min(50.0) as i32;
-    let cell_area_km2 = (grid_size * 111.0).powi(2);
-    let bw_deg = bandwidth_km * deg_per_km;
-
-    let mut grid = Vec::new();
-
-    for i in -cells_per_side/2..cells_per_side/2 {
-        for j in -cells_per_side/2..cells_per_side/2 {
-            let lon = center_lon + (i as f64 + 0.5) * grid_size;
-            let lat = center_lat + (j as f64 + 0.5) * grid_size;
-
-            let mut weighted_sum = 0.0;
-            let mut weight_sum = 0.0;
-
-            for (px, py, pv) in control_points {
-                let dx = lon - px;
-                let dy = lat - py;
-                let d2 = dx*dx + dy*dy;
-                let bw2 = bw_deg * bw_deg;
-                let kernel = (-d2 / (2.0 * bw2)).exp();
-                weighted_sum += pv * kernel;
-                weight_sum += kernel;
-            }
-
-            let density = if weight_sum > 0.0 {
-                weighted_sum / weight_sum
-            } else {
-                0.0
-            };
-
-            grid.push(PopulationGridCell {
-                lon,
-                lat,
-                population: density * cell_area_km2,
-                density,
-                zone_type: None,
-            });
+    let points: Vec<interpolation_service::InterpolationPoint> = control_points.iter().map(|(lon, lat, val)| {
+        interpolation_service::InterpolationPoint {
+            lon: *lon,
+            lat: *lat,
+            value: *val,
+            weight: 1.0,
         }
-    }
+    }).collect();
 
-    grid
+    let result = interpolation_service::kernel_density_interpolation(
+        center_lon,
+        center_lat,
+        site_area_km2,
+        &points,
+        bandwidth_km,
+        algorithm::POPULATION_GRID_RESOLUTION.unwrap_or(16),
+    );
+
+    let deg_per_km = 1.0 / 111.0;
+    let grid_len = result.grid_points.len() as f64;
+    let cell_area_km2 = if grid_len > 0.0 {
+        site_area_km2 / grid_len
+    } else {
+        (algorithm::POPULATION_GRID_SIZE * 111.0).powi(2)
+    };
+
+    result.grid_points.iter().map(|(lon, lat, val)| PopulationGridCell {
+        lon: *lon,
+        lat: *lat,
+        population: val * cell_area_km2,
+        density: *val,
+        zone_type: None,
+    }).collect()
 }
 
 pub fn get_zone_density_range(zone_type: &str) -> (f64, f64) {
@@ -190,132 +204,19 @@ pub fn allometric_growth_model(
     zones: &[(String, f64)],
     buildings: &[(f64, f64, String)],
 ) -> PopulationAnalysisResult {
-    let b = algorithm::POPULATION_ALLOMETRIC_EXPONENT;
-    let _scaling_factor = if site_area_km2 > 0.0 {
-        total_population / site_area_km2.powf(b)
-    } else {
-        0.0
-    };
-
-    let mut zone_populations: Vec<ZonePopulation> = Vec::new();
-    let mut total_zone_pop = 0.0_f64;
-    let mut zone_densities: HashMap<String, f64> = HashMap::new();
-    let mut zone_confidences: HashMap<String, f64> = HashMap::new();
-    let mut control_points: Vec<(f64, f64, f64)> = Vec::new();
-
-    for (zone_type, area_km2) in zones {
-        let buildings_in_zone: Vec<_> = buildings.iter()
-            .filter(|(_, _, bt)| bt == zone_type)
-            .cloned()
-            .collect();
-
-        let (fused_density, conf, _method) = multi_source_fusion_density(
-            zone_type,
-            *area_km2,
-            &buildings_in_zone,
-            algorithm::POPULATION_PERSONS_PER_ROOM,
-        );
-
-        let pop = area_km2 * fused_density;
-        let pop = if pop < 0.0 { 0.0 } else { pop };
-        total_zone_pop += pop;
-        zone_densities.insert(zone_type.clone(), fused_density);
-        zone_confidences.insert(zone_type.clone(), conf);
-
-        let sample_count = (area_km2 * 50.0).max(1.0).min(20.0) as usize;
-        for k in 0..sample_count {
-            let angle = (k as f64) * std::f64::consts::TAU / sample_count as f64;
-            let r = (area_km2 / std::f64::consts::PI).sqrt() * 0.5;
-            let deg_per_km = 1.0 / 111.0;
-            let dx = r * angle.cos() * deg_per_km;
-            let dy = r * angle.sin() * deg_per_km;
-            let idx = (k + zone_type.len()) % zones.len();
-            let angle_offset = (idx as f64) * std::f64::consts::TAU / zones.len().max(1) as f64;
-            let radius = (site_area_km2 / std::f64::consts::PI).sqrt() * 0.4 * deg_per_km;
-            let zx = center_lon + radius * angle_offset.cos() + dx;
-            let zy = center_lat + radius * angle_offset.sin() + dy;
-            control_points.push((zx, zy, fused_density));
-        }
-    }
-
-    for (blon, blat, btype) in buildings {
-        let density = zone_densities.get(btype).copied().unwrap_or(3000.0);
-        control_points.push((*blon, *blat, density * 1.3));
-    }
-
-    if total_zone_pop > 0.0 && total_population > 0.0 {
-        let ratio = total_population / total_zone_pop;
-        for (zone_type, area_km2) in zones {
-            let density = zone_densities.get(zone_type).copied().unwrap_or(500.0) * ratio;
-            let pop = area_km2 * density;
-            let percentage = (pop / total_population) * 100.0;
-            zone_populations.push(ZonePopulation {
-                zone_type: zone_type.clone(),
-                population: pop,
-                area_km2: *area_km2,
-                density,
-                percentage,
-            });
-        }
-
-        for cp in control_points.iter_mut() {
-            cp.2 *= ratio;
-        }
-    } else {
-        for (zone_type, area_km2) in zones {
-            let density = zone_densities.get(zone_type).copied().unwrap_or(500.0);
-            let pop = area_km2 * density;
-            total_zone_pop += pop;
-            zone_populations.push(ZonePopulation {
-                zone_type: zone_type.clone(),
-                population: pop,
-                area_km2: *area_km2,
-                density,
-                percentage: 0.0,
-            });
-        }
-        for zp in &mut zone_populations {
-            zp.percentage = if total_zone_pop > 0.0 { (zp.population / total_zone_pop) * 100.0 } else { 0.0 };
-        }
-    }
-
-    let grid_cells = if control_points.is_empty() {
-        generate_population_grid_simple(center_lon, zones, &zone_densities)
-    } else {
-        let bw = (site_area_km2 / std::f64::consts::PI).sqrt() * 0.25;
-        kernel_density_interpolation(center_lon, center_lat, site_area_km2, &control_points, bw.max(0.3))
-    };
-
-    let densities: Vec<f64> = grid_cells.iter().map(|c| c.density).collect();
-    let avg_density = if densities.is_empty() { 0.0 } else { densities.iter().sum::<f64>() / densities.len() as f64 };
-    let max_density = densities.iter().cloned().fold(0.0_f64, f64::max);
-
-    let avg_conf: f64 = if zone_confidences.is_empty() {
-        0.5
-    } else {
-        zone_confidences.values().sum::<f64>() / zone_confidences.len() as f64
-    };
-
-    let data_level = assess_data_completeness(zones, buildings, total_population > 0.0);
-    let level_bonus = match data_level {
-        DataCompleteness::High => 0.15,
-        DataCompleteness::Medium => 0.05,
-        DataCompleteness::Low => -0.1,
-        DataCompleteness::VeryLow => -0.25,
-    };
-
-    let confidence = (avg_conf + level_bonus).max(0.1).min(0.98);
-
-    PopulationAnalysisResult {
-        site_id: 0,
-        total_population: if total_population > 0.0 { total_population } else { total_zone_pop },
-        population_density_avg: avg_density,
-        population_density_max: max_density,
-        model_type: "allometric_growth_multi_source".to_string(),
-        confidence,
-        grid_cells,
-        zone_populations,
-    }
+    let reconstructor = PopulationReconstructor::new(ReconstructionConfig::default());
+    let converted_zones = convert_zones(zones, center_lon, center_lat);
+    let converted_buildings = convert_buildings(buildings);
+    let estimated_pop = if total_population > 0.0 { Some(total_population as i32) } else { None };
+    let result = reconstructor.allometric_growth_model(
+        center_lon,
+        center_lat,
+        site_area_km2,
+        estimated_pop,
+        &converted_zones,
+        &converted_buildings,
+    );
+    convert_population_result(result, zones)
 }
 
 fn generate_population_grid_simple(
@@ -374,94 +275,18 @@ pub fn residential_density_model(
         buildings.iter().map(|(_, lat, _)| *lat).sum::<f64>() / buildings.len() as f64
     };
 
-    let mut control_points: Vec<(f64, f64, f64)> = Vec::new();
-    let mut total_pop_from_buildings = 0.0_f64;
-
-    for (lon, lat, btype) in buildings {
-        let rooms = match btype.as_str() {
-            "palace" => 20.0,
-            "residential" => 4.0,
-            "temple" => 2.0,
-            "official" => 8.0,
-            "workshop" => 3.0,
-            "tomb" => 0.0,
-            "storage" => 0.0,
-            _ => 3.0,
-        };
-        let pop = rooms * persons_per_room;
-        total_pop_from_buildings += pop;
-
-        let area_per_building = 0.0002;
-        let density = pop / area_per_building;
-        control_points.push((*lon, *lat, density));
-    }
-
-    let mut zone_populations: Vec<ZonePopulation> = Vec::new();
-    let mut total_zone_pop = 0.0_f64;
-    let mut zone_densities: HashMap<String, f64> = HashMap::new();
-
-    for (zone_type, area_km2) in zones {
-        let buildings_in_zone: Vec<_> = buildings.iter()
-            .filter(|(_, _, bt)| bt == zone_type)
-            .cloned()
-            .collect();
-
-        let (fused_density, _conf, _method) = multi_source_fusion_density(
-            zone_type,
-            *area_km2,
-            &buildings_in_zone,
-            persons_per_room,
-        );
-
-        let pop = area_km2 * fused_density;
-        total_zone_pop += pop;
-        zone_densities.insert(zone_type.clone(), fused_density);
-        zone_populations.push(ZonePopulation {
-            zone_type: zone_type.clone(),
-            population: pop,
-            area_km2: *area_km2,
-            density: fused_density,
-            percentage: 0.0,
-        });
-    }
-
-    for zp in &mut zone_populations {
-        zp.percentage = if total_zone_pop > 0.0 { (zp.population / total_zone_pop) * 100.0 } else { 0.0 };
-    }
-
-    let grid_cells = if control_points.len() >= 3 {
-        let bw = if site_area_km2 > 0.0 {
-            (site_area_km2 / std::f64::consts::PI).sqrt() * 0.2
-        } else {
-            0.5
-        };
-        kernel_density_interpolation(center_lon, center_lat, site_area_km2.max(1.0), &control_points, bw.max(0.2))
-    } else {
-        generate_population_grid_simple(center_lon, zones, &zone_densities)
-    };
-
-    let densities: Vec<f64> = grid_cells.iter().map(|c| c.density).collect();
-    let avg_density = if densities.is_empty() { 0.0 } else { densities.iter().sum::<f64>() / densities.len() as f64 };
-    let max_density = densities.iter().cloned().fold(0.0_f64, f64::max);
-
-    let data_level = assess_data_completeness(zones, buildings, false);
-    let confidence = match data_level {
-        DataCompleteness::High => 0.85,
-        DataCompleteness::Medium => 0.7,
-        DataCompleteness::Low => 0.55,
-        DataCompleteness::VeryLow => 0.35,
-    };
-
-    PopulationAnalysisResult {
-        site_id: 0,
-        total_population: if total_pop_from_buildings > 0.0 { total_pop_from_buildings } else { total_zone_pop },
-        population_density_avg: avg_density,
-        population_density_max: max_density,
-        model_type: "residential_density_kernel".to_string(),
-        confidence,
-        grid_cells,
-        zone_populations,
-    }
+    let reconstructor = PopulationReconstructor::new(ReconstructionConfig::default());
+    let converted_zones = convert_zones(zones, center_lon, center_lat);
+    let converted_buildings = convert_buildings(buildings);
+    let result = reconstructor.residential_density_model(
+        center_lon,
+        center_lat,
+        site_area_km2,
+        &converted_zones,
+        &converted_buildings,
+        persons_per_room,
+    );
+    convert_population_result(result, zones)
 }
 
 pub fn inverse_distance_weighted(
@@ -472,144 +297,21 @@ pub fn inverse_distance_weighted(
     zones: &[(String, f64)],
     buildings: &[(f64, f64, String)],
 ) -> PopulationAnalysisResult {
-    let grid_size = algorithm::POPULATION_GRID_SIZE;
-    let half_size_km = (site_area_km2.sqrt() / 2.0).max(0.5);
-    let deg_per_km = 1.0 / 111.0;
-    let half_deg = half_size_km * deg_per_km;
-
-    let cells_per_side = ((half_deg * 2.0) / grid_size).ceil() as i32;
-    let cells_per_side = cells_per_side.max(10).min(50);
-
-    let mut zone_centers: Vec<(f64, f64, f64, String)> = Vec::new();
-    let mut angle = 0.0;
-    let angle_step = std::f64::consts::TAU / zones.len().max(1) as f64;
-
-    for (zone_type, area_km2) in zones {
-        let r = half_deg * 0.6 * (angle.cos().abs() * 0.5 + 0.5);
-        let zl = center_lon + r * angle.cos();
-        let zlt = center_lat + r * angle.sin();
-
-        let buildings_in_zone: Vec<_> = buildings.iter()
-            .filter(|(_, _, bt)| bt == zone_type)
-            .cloned()
-            .collect();
-
-        let (fused_density, _conf, _method) = multi_source_fusion_density(
-            zone_type,
-            *area_km2,
-            &buildings_in_zone,
-            algorithm::POPULATION_PERSONS_PER_ROOM,
-        );
-
-        zone_centers.push((zl, zlt, fused_density, zone_type.clone()));
-        angle += angle_step;
+    let reconstructor = PopulationReconstructor::new(ReconstructionConfig::default());
+    let converted_zones = convert_zones(zones, center_lon, center_lat);
+    let converted_buildings = convert_buildings(buildings);
+    let result = reconstructor.inverse_distance_weighted(
+        center_lon,
+        center_lat,
+        site_area_km2,
+        &converted_zones,
+        &converted_buildings,
+    );
+    let mut converted = convert_population_result(result, zones);
+    if total_population > 0.0 {
+        converted.total_population = total_population;
     }
-
-    let mut grid_cells: Vec<PopulationGridCell> = Vec::new();
-    let cell_area_km2 = (grid_size * 111.0).powi(2);
-
-    for i in 0..cells_per_side {
-        for j in 0..cells_per_side {
-            let lon = center_lon - half_deg + (i as f64 + 0.5) * grid_size;
-            let lat = center_lat - half_deg + (j as f64 + 0.5) * grid_size;
-
-            let mut total_weight = 0.0;
-            let mut weighted_density = 0.0;
-            let mut best_zone = None;
-            let mut best_weight = 0.0;
-
-            for (zl, zlt, density, zone_type) in &zone_centers {
-                let dist = ((lon - zl).powi(2) + (lat - zlt).powi(2)).sqrt();
-                let dist = dist.max(0.0001);
-                let weight = 1.0 / dist.powi(2);
-
-                weighted_density += density * weight;
-                total_weight += weight;
-
-                if weight > best_weight {
-                    best_weight = weight;
-                    best_zone = Some(zone_type.clone());
-                }
-            }
-
-            let density = if total_weight > 0.0 { weighted_density / total_weight } else { 0.0 };
-            let dist_from_center = ((lon - center_lon).powi(2) + (lat - center_lat).powi(2)).sqrt();
-            let center_decay = (-dist_from_center / half_deg * 1.5).exp().max(0.1);
-            let density = density * center_decay;
-
-            let population = density * cell_area_km2;
-
-            grid_cells.push(PopulationGridCell {
-                lon,
-                lat,
-                population,
-                density,
-                zone_type: best_zone,
-            });
-        }
-    }
-
-    let grid_total_pop: f64 = grid_cells.iter().map(|c| c.population).sum();
-    if grid_total_pop > 0.0 && total_population > 0.0 {
-        let scale = total_population / grid_total_pop;
-        for cell in &mut grid_cells {
-            cell.population *= scale;
-            cell.density *= scale;
-        }
-    }
-
-    let mut zone_pop_map: HashMap<String, (f64, f64)> = HashMap::new();
-    for (zone_type, area_km2) in zones {
-        let buildings_in_zone: Vec<_> = buildings.iter()
-            .filter(|(_, _, bt)| bt == zone_type)
-            .cloned()
-            .collect();
-        let (fused_density, _conf, _) = multi_source_fusion_density(
-            zone_type,
-            *area_km2,
-            &buildings_in_zone,
-            algorithm::POPULATION_PERSONS_PER_ROOM,
-        );
-        let pop = area_km2 * fused_density;
-        zone_pop_map.insert(zone_type.clone(), (pop, *area_km2));
-    }
-
-    let total_zone_pop: f64 = zone_pop_map.values().map(|(p, _)| *p).sum();
-    let mut zone_populations: Vec<ZonePopulation> = zone_pop_map
-        .into_iter()
-        .map(|(zone_type, (pop, area))| ZonePopulation {
-            zone_type,
-            population: pop,
-            area_km2: area,
-            density: pop / area.max(0.0001),
-            percentage: if total_zone_pop > 0.0 { (pop / total_zone_pop) * 100.0 } else { 0.0 },
-        })
-        .collect();
-
-    zone_populations.sort_by(|a, b| b.population.partial_cmp(&a.population).unwrap_or(std::cmp::Ordering::Equal));
-
-    let final_pop = if total_population > 0.0 { total_population } else { grid_total_pop };
-    let avg_density = if grid_cells.is_empty() { 0.0 } else { grid_cells.iter().map(|c| c.density).sum::<f64>() / grid_cells.len() as f64 };
-    let max_density = grid_cells.iter().map(|c| c.density).fold(0.0_f64, f64::max);
-
-    let data_level = assess_data_completeness(zones, buildings, total_population > 0.0);
-    let confidence = match data_level {
-        DataCompleteness::High => 0.8,
-        DataCompleteness::Medium => 0.65,
-        DataCompleteness::Low => 0.5,
-        DataCompleteness::VeryLow => 0.3,
-    };
-
-    PopulationAnalysisResult {
-        site_id: 0,
-        total_population: final_pop,
-        population_density_avg: avg_density,
-        population_density_max: max_density,
-        model_type: "idw_interpolation_multi_source".to_string(),
-        confidence,
-        grid_cells,
-        zone_populations,
-    }
+    converted
 }
 
 pub async fn analyze_population(
